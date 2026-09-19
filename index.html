@@ -129,7 +129,7 @@
     }
 
     const App = () => {
-      // 在庫情報だけでなく、進行状況（ゲージ、食べた枚数、履歴など）も全てLocalStorageで管理
+      // 全ての状態をLocalStorageで管理
       const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
         s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
       });
@@ -141,6 +141,7 @@
       const [guaranteedCount, setGuaranteedCount] = useLocalStorage('mewtwo_guaranteedCount', 3);
       const [isFull, setIsFull] = useLocalStorage('mewtwo_isFull', false);
       const [history, setHistory] = useLocalStorage('mewtwo_history', []);
+      const [isPremium, setIsPremium] = useLocalStorage('mewtwo_isPremium', true); // プレパスON/OFF設定
       
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
 
@@ -183,7 +184,7 @@
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
       // --- 動的計画法（DP）コアエンジン ---
-      const getBestAction = useCallback((g, f, chance, inv, enc, guar) => {
+      const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
         const CATCH_REWARD = 2000; 
         const GAUGE_VALUE = 20;    
 
@@ -191,7 +192,8 @@
           if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
           if (cf >= 10) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
 
-          const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}`;
+          // キャッシュのキーにプレパス設定(premium)を追加し、ON/OFFで計算結果が混ざらないようにする
+          const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}-${premium}`;
           if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
 
           if (globalDpMemo.size > 50000) globalDpMemo.clear();
@@ -209,7 +211,8 @@
           const sables = [
             { id: 's6', val: 6, name: 'ミュウツー(6)' },
             { id: 's5', val: 5, name: 'ハイパー(5)' },
-            { id: 's4', val: 4, name: 'ボーナス(4)' },
+            // プレパス状態によってボーナスサブレの回復量と名前を動的に変更
+            { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)' },
             { id: 's3', val: 3, name: 'スーパー(3)' },
             { id: 's1', val: 1, name: 'ポケ(1)' }
           ];
@@ -292,7 +295,7 @@
         let currInv = { ...inventory };
         
         while (currG < 30 && currF < 10) {
-          const res = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount);
+          const res = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount, isPremium);
           if (!res || !res.action || res.action.id === 'pass') break;
           
           route.push(res.action.name);
@@ -305,14 +308,14 @@
           if (currInv[res.action.id] !== '∞') currInv[res.action.id]--;
         }
         return { route, finalG: currG };
-      }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, getBestAction]);
+      }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, isPremium, getBestAction]);
 
       const currentBestMove = useMemo(() => {
         if (30 - actualGauge <= 0) return { type: '完了', id: null, prob: 1.0 };
-        const res = getBestAction(actualGauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount);
+        const res = getBestAction(actualGauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount, isPremium);
         if (!res || !res.action) return { type: '➔ 翌日へ (ストップ)', id: 'pass', prob: 0.0 };
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
-      }, [actualGauge, fedCount, isChance, guaranteedCount, inventory, getBestAction]);
+      }, [actualGauge, fedCount, isChance, guaranteedCount, inventory, isPremium, getBestAction]);
 
       // --- モンテカルロ・シミュレーション (入力されたゲージと枚数を反映して計算) ---
       useEffect(() => {
@@ -336,20 +339,19 @@
               let simInv = { ...inventory };
 
               for (let e = 0; e < simInv.encounters; e++) {
-                // 初回の出会いのみ、ユーザーが入力した進行状況（ゲージ・枚数・チャンス）を引き継ぐ
                 let sf = (e === 0) ? fedCount : 0;
                 let sChance = (e === 0) ? isChance : Math.random() < 0.1;
                 let simGauge = (e === 0) ? actualGauge : 0; 
                 let active = true;
 
-                // 既に完了している状態からスタートした場合
                 if (e === 0 && simGauge >= 30) {
                   catches++;
                   active = false;
                 }
 
                 while (active && simGauge < 30) {
-                  const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, 3);
+                  // モンテカルロ内でも isPremium の設定を引き継ぐ
+                  const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, guaranteedCount, isPremium);
                   if (!res || !res.action || res.action.id === 'pass') break;
                   const action = res.action;
 
@@ -401,7 +403,7 @@
           isCancelled = true; 
           clearTimeout(debounceTimeoutId);
         };
-      }, [inventory, getBestAction, actualGauge, fedCount, isChance]);
+      }, [inventory, getBestAction, actualGauge, fedCount, isChance, guaranteedCount, isPremium]);
 
       // --- アクションハンドラ ---
       const handleThrow = (multiplier) => {
@@ -427,7 +429,8 @@
           actualMultiplier = 3;
         }
 
-        let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? 4 : actId === 's3' ? 3 : 1;
+        // isPremiumの状態に応じてボーナスサブレの加算値を動的に切り替え
+        let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? (isPremium ? 4 : 3) : actId === 's3' ? 3 : 1;
         let added = actualMultiplier === 30 ? 30 : val * actualMultiplier;
 
         if (inventory[actId] !== '∞') {
@@ -636,11 +639,35 @@
             </div>
 
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
-              <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-sm font-bold text-gray-800">サブレ所持数・設定</h2>
+                
+                {/* プレパス切り替えトグルスイッチ */}
+                <label className="flex items-center cursor-pointer">
+                  <div className="relative">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only" 
+                      checked={isPremium} 
+                      onChange={(e) => {
+                        setIsPremium(e.target.checked);
+                        globalDpMemo.clear(); 
+                      }} 
+                    />
+                    <div className={`block w-10 h-6 rounded-full transition-colors ${isPremium ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
+                    <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${isPremium ? 'transform translate-x-4' : ''}`}></div>
+                  </div>
+                  <span className={`ml-2 text-xs font-bold ${isPremium ? 'text-purple-700' : 'text-gray-500'}`}>プレパス</span>
+                </label>
+              </div>
+
               <div className="space-y-3">
                 <InputRow id="s6" label="ミュウツーサブレ (6)" hasInfinity={false} value={formData.s6} onChange={handleFormChange} />
                 <InputRow id="s5" label="ハイパーサブレ (5)" hasInfinity={false} value={formData.s5} onChange={handleFormChange} />
-                <InputRow id="s4" label="ボーナスサブレ+ (4)" hasInfinity={false} value={formData.s4} onChange={handleFormChange} max={1} />
+                
+                {/* プレパスのON/OFFでラベルを動的に切り替え */}
+                <InputRow id="s4" label={isPremium ? "ボーナスサブレ+ (4)" : "ボーナスサブレ (3)"} hasInfinity={false} value={formData.s4} onChange={handleFormChange} max={1} />
+                
                 <InputRow id="s3" label="スーパーサブレ (3)" hasInfinity={true} value={formData.s3} onChange={handleFormChange} />
                 <InputRow id="s1" label="ポケサブレ (1)" hasInfinity={true} value={formData.s1} onChange={handleFormChange} />
                 <InputRow id="encounters" label="残り出会い回数" hasInfinity={false} value={formData.encounters} onChange={handleFormChange} />
