@@ -526,6 +526,9 @@
       // 現在遭遇の捕獲確率は、DPの主目的（イベント全体の期待捕獲数）とは分離して扱う。
       // ただし期待値が同値の行動同士を比較する時だけ、ボーナスサブレ優先の判定に使う。
       const catchMemo = new Map();
+      // 4 vs 3 の同値判定などで「この1手を固定した場合の当該遭遇捕獲率」を
+      // 同じ状態について何度も再計算しないための専用キャッシュ。
+      const forcedCatchMemo = new Map();
 
       function policyAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce) {
         if (ce <= 0 || cg >= TARGET) return -1;
@@ -560,6 +563,10 @@
 
       const forcedActionCatchProb = (ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce) => {
         if (ai < 0 || cg >= TARGET || ce <= 0) return 0;
+        const stateKey = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+        const forcedKey = `${stateKey}|${ai}`;
+        const cached = forcedCatchMemo.get(forcedKey);
+        if (cached !== undefined) return cached;
         const a = actions[ai];
         const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
         const np = Math.min(ctx.guar, cp + 1);
@@ -571,7 +578,9 @@
         if (cChance && cp === 0) pEat = 0.10 + 0.90 * afterEat(cg + a.val * 3);
         else pEat = 0.02 + 0.08 * afterEat(cg + a.val * 3) + 0.90 * afterEat(cg + a.val);
         const eatProb = cp >= ctx.guar ? 0.6 : 1.0;
-        return eatProb * pEat;
+        const out = eatProb * pEat;
+        forcedCatchMemo.set(forcedKey, out);
+        return out;
       };
 
       function dp(cg, cp, cChance, s6, s5, s4, s3, s1, ce) {
@@ -718,11 +727,21 @@
                 );
                 let decidedByBonus4 = false;
                 if (isPremiumBonusVsSuper) {
-                  const currentCatch = forcedActionCatchProb(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
-                  const bestCatch = forcedActionCatchProb(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
-                  if (Math.abs(currentCatch - bestCatch) <= 1e-12) {
+                  // mustFinishNow 中の候補は、どちらも「残り保証内で通常成功だけでも100%捕獲」を
+                  // 維持する行動に既に限定済み。この場合は当該遭遇の捕獲率が双方100%なので、
+                  // 高コストな捕獲率再帰を走らせず、そのままボーナス+(4)を優先できる。
+                  if (mustFinishNow) {
                     betterTie = a.id === 's4';
                     decidedByBonus4 = true;
+                  } else {
+                    // 取り切りハード制約外では捕獲率が同じとは限らないため、従来どおり
+                    // 当該遭遇の捕獲率まで同値の時だけボーナス+(4)を優先する。
+                    const currentCatch = forcedActionCatchProb(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+                    const bestCatch = forcedActionCatchProb(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+                    if (Math.abs(currentCatch - bestCatch) <= 1e-12) {
+                      betterTie = a.id === 's4';
+                      decidedByBonus4 = true;
+                    }
                   }
                 }
 
