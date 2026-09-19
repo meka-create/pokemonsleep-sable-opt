@@ -4,29 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>ミュウツーサブレ最適化ツール</title>
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- React & ReactDOM -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <!-- Babel for in-browser JSX compilation -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Chart.js for Simulation Mode -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
   <style>
-    body {
-      -webkit-tap-highlight-color: transparent;
-      background-color: #f3f4f6;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    .fade-in {
-      animation: fadeIn 0.2s ease-in-out;
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(-10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    body { background-color: #f3f4f6; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
+    /* スクロールバー非表示 */
+    ::-webkit-scrollbar { display: none; }
   </style>
 </head>
 <body>
@@ -35,7 +20,6 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
 
-    // --- カスタムフック: LocalStorage ---
     function useLocalStorage(key, initialValue) {
       const [storedValue, setStoredValue] = useState(() => {
         try {
@@ -45,7 +29,6 @@
           return initialValue;
         }
       });
-
       const setValue = (value) => {
         try {
           const valueToStore = value instanceof Function ? value(storedValue) : value;
@@ -58,83 +41,139 @@
       return [storedValue, setValue];
     }
 
-    // --- コンポーネント: ナビゲーションモード（主画面） ---
-    const NavigationMode = ({ inventory }) => {
+    const App = () => {
+      // --- State ---
+      const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
+        s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞'
+      });
       const [gauge, setGauge] = useState(0);
       const [isChance, setIsChance] = useState(false);
-      const [fedCount, setFedCount] = useState(0); // 食べたサブレの数
-      const [guaranteedCount, setGuaranteedCount] = useState(3); // 確定で食べる枚数(通常3, 例外2)
+      const [fedCount, setFedCount] = useState(0);
+      const [guaranteedCount, setGuaranteedCount] = useState(3);
 
-      // 次の最適サブレを数学的に計算する簡易エンジン
+      // --- インベントリ更新ハンドラ ---
+      const handleInvChange = (id, value) => {
+        let parsed = value;
+        if (value !== '∞') {
+          parsed = parseInt(String(value).replace(/[^0-9]/g, ''), 10);
+          if (isNaN(parsed) || parsed < 0) parsed = 0;
+        }
+        setInventory(prev => ({ ...prev, [id]: parsed }));
+      };
+
+      // --- 動的計画法（DP）による真の期待値計算エンジン ---
       const bestMove = useMemo(() => {
         const remaining = 30 - gauge;
-        if (remaining <= 0) return { type: '完了', message: '捕獲完了です！' };
-        
-        const isFullRisk = fedCount >= guaranteedCount;
-        const eatProb = isFullRisk ? 0.6 : 1.0; // 満腹リスク（4枚目以降は60%で食べる）
-        
-        // 簡易的な期待値スコアリング
-        const options = [
-          { name: 'ミュウツー(6)', val: 6, inv: inventory.s6, cost: 6.5 },
-          { name: 'ハイパー(5)', val: 5, inv: inventory.s5, cost: 5.0 },
-          { name: 'ボーナス(4)', val: 4, inv: inventory.s4, cost: 0.1 }, // 優先消費
-          { name: 'スーパー(3)', val: 3, inv: inventory.s3, cost: 3.0 },
-          { name: 'ポケ(1)', val: 1, inv: inventory.s1, cost: 1.0 }
+        if (remaining <= 0) return { type: '完了', message: '捕獲完了です！お疲れ様でした。' };
+
+        // サブレの相対的価値（節約優先度）
+        const costs = { s6: 200, s5: 80, s4: 0, s3: 40, s1: 10 };
+        const sables = [
+          { id: 's6', val: 6, name: 'ミュウツー(6)' },
+          { id: 's5', val: 5, name: 'ハイパー(5)' },
+          { id: 's4', val: 4, name: 'ボーナス(4)' },
+          { id: 's3', val: 3, name: 'スーパー(3)' },
+          { id: 's1', val: 1, name: 'ポケ(1)' }
         ];
 
-        let bestScore = -Infinity;
-        let bestOption = null;
+        const CATCH_REWARD = 10000;
+        const GAUGE_VALUE = 20; // 捕獲できなくてもゲージを進める価値
+        const memo = {};
 
-        options.forEach(opt => {
-          if (opt.inv === 0 && opt.inv !== '∞') return;
-          
-          let expectedGain = 0;
-          if (isChance && fedCount === 0) {
-            // チャンス状態（1枚目）: 90%で3倍, 10%で超成功(一発捕獲)
-            expectedGain = (0.9 * (opt.val * 3)) + (0.1 * 30);
-          } else {
-            // 通常時: 90%等倍, 8%で3倍, 2%で超成功
-            expectedGain = eatProb * ((0.9 * opt.val) + (0.08 * (opt.val * 3)) + (0.02 * 30));
+        // 状態(g: 現在ゲージ, f: 食べた枚数, chance: チャンス状態, inv: 残りサブレ)の期待値を計算
+        const calcDP = (g, f, chance, inv) => {
+          if (g >= 30) return { ev: CATCH_REWARD, action: null };
+          if (f >= 6) return { ev: g * GAUGE_VALUE, action: null }; // 深さ制限(現実的に6枚目以降はほぼ満腹)
+
+          const memoKey = `${g}-${f}-${chance}-${inv.s6}-${inv.s5}-${inv.s4}-${inv.s3}-${inv.s1}`;
+          if (memo[memoKey]) return memo[memoKey];
+
+          let bestVal = -Infinity;
+          let bestAction = null;
+
+          // 満腹リスクの計算（このターン投げた「後」に満腹になる確率）
+          const fullRiskRate = (f + 1 >= guaranteedCount) ? 0.4 : 0.0;
+          const eatNextRate = 1.0 - fullRiskRate;
+
+          for (const sable of sables) {
+            const count = inv[sable.id];
+            if (count !== '∞' && count <= 0) continue;
+
+            const nextInv = { ...inv };
+            if (nextInv[sable.id] !== '∞') nextInv[sable.id] -= 1;
+            
+            const cost = costs[sable.id];
+            let expectedValue = 0;
+
+            // 結果を評価するヘルパー（投げた後の状態をシミュレーション）
+            const evaluateOutcome = (nextG) => {
+              if (nextG >= 30) return CATCH_REWARD; // 捕獲
+              // 次のターンへ進む。満腹になる確率(0.4)と、食べ続けて次も投げられる確率(0.6)の期待値を合成
+              const nextStateEv = calcDP(nextG, f + 1, false, nextInv).ev;
+              return (eatNextRate * nextStateEv) + (fullRiskRate * (nextG * GAUGE_VALUE));
+            };
+
+            if (chance) {
+              // チャンス: 90%で大成功(3倍), 10%で超成功(MAX)
+              const valBig = Math.min(30, g + sable.val * 3);
+              const evBig = evaluateOutcome(valBig);
+              const evMega = CATCH_REWARD;
+              expectedValue = (0.9 * evBig) + (0.1 * evMega) - cost;
+            } else {
+              // 通常: 90%等倍, 8%大成功(3倍), 2%超成功(MAX)
+              const valNorm = Math.min(30, g + sable.val);
+              const valBig = Math.min(30, g + sable.val * 3);
+              const evNorm = evaluateOutcome(valNorm);
+              const evBig = evaluateOutcome(valBig);
+              const evMega = CATCH_REWARD;
+              expectedValue = (0.9 * evNorm) + (0.08 * evBig) + (0.02 * evMega) - cost;
+            }
+
+            if (expectedValue > bestVal) {
+              bestVal = expectedValue;
+              bestAction = sable.name;
+            }
           }
 
-          // ゲージの無駄をペナルティ化
-          const overHeal = Math.max(0, expectedGain - remaining);
-          // 独自のスコア算出（期待ゲージ進行量 - サブレの相対的価値 - オーバーヒール減点）
-          const score = expectedGain - opt.cost - (overHeal * 0.5);
+          const result = { ev: bestVal, action: bestAction };
+          memo[memoKey] = result;
+          return result;
+        };
 
-          if (score > bestScore) {
-            bestScore = score;
-            bestOption = opt.name;
-          }
-        });
+        const result = calcDP(gauge, fedCount, isChance, inventory);
+        
+        // 例外処理: サブレが一切ない場合
+        if (!result.action) return { type: '在庫なし', message: '投げられるサブレがありません。' };
+        return { type: result.action, message: `${result.action} を投げましょう。` };
+      }, [gauge, fedCount, isChance, guaranteedCount, inventory]);
 
-        // 資料ベースの例外処理補正（確定枚数残りが1枚で、取り切れる場合）
-        if (guaranteedCount - fedCount === 1 && remaining <= 6 && inventory.s6 > 0) {
-            bestOption = 'ミュウツー(6)';
-        }
-
-        return bestOption ? { type: bestOption, message: `${bestOption} を投げましょう。` } : { type: '在庫なし', message: '投げられるサブレがありません。' };
-      }, [gauge, isChance, fedCount, guaranteedCount, inventory]);
-
+      // --- アクション ---
       const handleThrow = (multiplier) => {
-        // multiplier: 1(通常), 3(大成功), 30(超成功), 0(満腹)
         if (multiplier === 0) {
-          alert("満腹になりました。今日の判定はここまでです。");
+          alert("満腹になりました。今日の判定は終了です。");
           return;
         }
-        
         let added = 0;
         if (bestMove.type.includes('6')) added = 6 * multiplier;
         else if (bestMove.type.includes('5')) added = 5 * multiplier;
         else if (bestMove.type.includes('4')) added = 4 * multiplier;
         else if (bestMove.type.includes('3')) added = 3 * multiplier;
         else if (bestMove.type.includes('1')) added = 1 * multiplier;
+        if (multiplier === 30) added = 30;
 
-        if (multiplier === 30) added = 30; // 超成功
+        // インベントリの消費
+        const usedId = bestMove.type.includes('6') ? 's6' : 
+                       bestMove.type.includes('5') ? 's5' : 
+                       bestMove.type.includes('4') ? 's4' : 
+                       bestMove.type.includes('3') ? 's3' : 's1';
+        
+        if (inventory[usedId] !== '∞') {
+          setInventory(prev => ({ ...prev, [usedId]: Math.max(0, prev[usedId] - 1) }));
+        }
 
         setGauge(Math.min(30, gauge + added));
         setFedCount(fedCount + 1);
-        setIsChance(false); // チャンスは1枚目のみ
+        setIsChance(false);
       };
 
       const resetEncounter = () => {
@@ -143,187 +182,97 @@
         setIsChance(false);
       };
 
-      return (
-        <div className="p-4 space-y-6">
-          <div className="bg-white rounded-2xl shadow-sm p-6 border-t-4 border-purple-600">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">現在の状態</h2>
-            
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-sm text-gray-600">フレンドポイント</span>
-              <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
-            </div>
-            
-            <div className="w-full bg-gray-200 rounded-full h-4 mb-6">
-              <div className="bg-purple-600 h-4 rounded-full transition-all duration-500" style={{ width: `${(gauge / 30) * 100}%` }}></div>
-            </div>
-
-            <div className="flex gap-4 mb-4">
-              <label className="flex items-center space-x-2 text-sm font-medium text-gray-700">
-                <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded text-purple-600 focus:ring-purple-500" disabled={fedCount > 0} />
-                <span>チャンス状態 (1投目のみ)</span>
-              </label>
-            </div>
-
-            <div className="flex items-center space-x-4 mb-2">
-              <span className="text-sm font-medium text-gray-700">確定で食べる枚数:</span>
-              <select value={guaranteedCount} onChange={(e) => setGuaranteedCount(Number(e.target.value))} className="border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 text-sm">
-                <option value={3}>3枚 (通常)</option>
-                <option value={2}>2枚</option>
-              </select>
-            </div>
-            <p className="text-xs text-gray-500">現在 {fedCount} 枚目まで食べました（{fedCount >= guaranteedCount ? '満腹リスクあり' : '確定ライン'}）</p>
-          </div>
-
-          <div className="bg-purple-50 rounded-2xl shadow-sm p-6 text-center border border-purple-100">
-            <p className="text-sm text-purple-800 mb-2 font-semibold">次に投げるべきサブレ</p>
-            <p className="text-3xl font-black text-purple-900 mb-4">{bestMove.type}</p>
-            <p className="text-sm text-gray-600 mb-6">実際の結果を記録してください</p>
-            
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <button onClick={() => handleThrow(1)} className="bg-white border-2 border-purple-200 text-purple-700 py-2 rounded-xl font-bold active:bg-purple-100 shadow-sm">通常</button>
-              <button onClick={() => handleThrow(3)} className="bg-purple-600 text-white py-2 rounded-xl font-bold active:bg-purple-700 shadow-sm shadow-purple-300">大成功 (3倍)</button>
-              <button onClick={() => handleThrow(30)} className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-2 rounded-xl font-bold active:opacity-80 shadow-sm">超成功 (一発)</button>
-              <button onClick={() => handleThrow(0)} className="bg-gray-500 text-white py-2 rounded-xl font-bold active:bg-gray-600 shadow-sm">満腹 (逃走)</button>
-            </div>
-          </div>
-
-          <button onClick={resetEncounter} className="w-full py-3 text-gray-500 font-medium text-sm underline">次の出会いへリセット</button>
-        </div>
-      );
-    };
-
-    // --- コンポーネント: インベントリ設定画面 ---
-    const InventoryMode = ({ inventory, setInventory }) => {
-      const [formData, setFormData] = useState(inventory);
-      const [isModified, setIsModified] = useState(false);
-
-      const handleChange = (field, value) => {
-        const val = value === '∞' ? '∞' : Number(value);
-        const newData = { ...formData, [field]: val };
-        setFormData(newData);
-        setIsModified(JSON.stringify(newData) !== JSON.stringify(inventory));
-      };
-
-      const handleSave = () => {
-        setInventory(formData);
-        setIsModified(false);
-      };
-
-      return (
-        <div className="p-4 space-y-4 pb-24">
-          <div className="bg-white rounded-2xl shadow-sm p-6 relative">
-            <h2 className="text-xl font-bold text-gray-800 mb-6">所持サブレ設定</h2>
-            
-            <div className="space-y-4">
-              {[
-                { id: 's6', label: 'ミュウツーサブレ (6)', type: 'number' },
-                { id: 's5', label: 'ハイパーサブレ (5)', type: 'number' },
-                { id: 's4', label: 'ボーナスサブレ+ (4)', type: 'select', options: [0, 1] },
-                { id: 's3', label: 'スーパーサブレ (3)', type: 'number' },
-                { id: 's1', label: 'ポケサブレ (1)', type: 'text' } // ∞入力対応のためtext
-              ].map(item => (
-                <div key={item.id} className="flex justify-between items-center border-b border-gray-100 pb-2">
-                  <span className="text-sm font-medium text-gray-700">{item.label}</span>
-                  {item.type === 'select' ? (
-                    <select value={formData[item.id]} onChange={(e) => handleChange(item.id, e.target.value)} className="w-20 p-2 border border-gray-300 rounded text-center">
-                      {item.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                    </select>
-                  ) : (
-                    <input 
-                      type={item.type} 
-                      value={formData[item.id]} 
-                      onChange={(e) => handleChange(item.id, e.target.value)} 
-                      className="w-20 p-2 border border-gray-300 rounded text-center focus:ring-purple-500 focus:border-purple-500"
-                    />
-                  )}
-                </div>
-              ))}
-              
-              <div className="flex justify-between items-center pt-4">
-                <span className="text-sm font-bold text-gray-700">残り遭遇回数 (目安)</span>
-                <input type="number" value={formData.encounters} onChange={(e) => handleChange('encounters', e.target.value)} className="w-20 p-2 border-2 border-purple-300 rounded text-center bg-purple-50 font-bold" />
-              </div>
-            </div>
-
-            {/* 値が変更された時のみ表示されるインラインSaveボタン */}
-            {isModified && (
-              <div className="mt-6 flex justify-end fade-in">
-                <button onClick={handleSave} className="bg-purple-600 text-white px-6 py-2 rounded-full font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-transform">
-                  変更を保存
-                </button>
-              </div>
+      // --- UI描画 ---
+      const InputRow = ({ id, label, isS6 }) => (
+        <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
+          <span className="text-sm font-medium text-gray-700">{label}</span>
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              inputMode={inventory[id] === '∞' ? 'text' : 'numeric'}
+              value={inventory[id]} 
+              onChange={(e) => handleInvChange(id, e.target.value)} 
+              className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none transition-all"
+            />
+            {!isS6 && (
+              <button 
+                onClick={() => handleInvChange(id, '∞')} 
+                className="px-3 bg-purple-100 text-purple-700 rounded text-sm font-bold active:bg-purple-200 transition-colors"
+              >
+                ∞
+              </button>
             )}
           </div>
         </div>
       );
-    };
-
-    // --- コンポーネント: シミュレーションモード ---
-    const SimulationMode = ({ inventory }) => {
-      // 簡易的な期待値表示用モック（本来は動的計算）
-      return (
-        <div className="p-4 space-y-6">
-          <div className="bg-white rounded-2xl shadow-sm p-6">
-            <h2 className="text-xl font-bold text-gray-800 mb-2">イベント完走予測</h2>
-            <p className="text-sm text-gray-500 mb-6">現在の所持サブレと残り遭遇回数に基づく期待値</p>
-            
-            <div className="text-center mb-6">
-              <span className="text-gray-500 text-sm">平均捕獲期待値</span>
-              <div className="text-4xl font-black text-purple-700 mt-1">約 7.95 体</div>
-            </div>
-
-            <div className="bg-purple-50 p-4 rounded-xl text-sm text-gray-700 space-y-2">
-              <p>💡 <strong>シミュレーション結果:</strong></p>
-              <p>現在の設定では、イベント後半でミュウツーサブレが不足するリスクが低いため、序盤は貯めを優先し、確実に取り切れる日にミュウツーサブレを投入する「資料推奨戦略」が最適です。</p>
-            </div>
-          </div>
-        </div>
-      );
-    };
-
-    // --- メインアプリケーション ---
-    const App = () => {
-      const [activeTab, setActiveTab] = useState('nav');
-      
-      // LocalStorageを使用した状態管理の初期値
-      const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
-        s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
-      });
 
       return (
-        <div className="min-h-screen max-w-md mx-auto bg-gray-100 flex flex-col">
-          {/* Header */}
-          <header className="bg-white px-4 pt-12 pb-4 shadow-sm sticky top-0 z-10">
-            <h1 className="text-xl font-black text-purple-900 tracking-tight flex items-center gap-2">
-              <span className="bg-purple-600 text-white px-2 py-1 rounded text-sm">Opt</span>
-              ミュウツーサブレ
+        <div className="min-h-screen max-w-md mx-auto bg-gray-200 flex flex-col">
+          <header className="bg-white px-4 pt-8 pb-3 shadow-sm sticky top-0 z-10 flex justify-between items-end">
+            <h1 className="text-lg font-black text-purple-900 tracking-tight flex items-center gap-2">
+              <span className="bg-purple-600 text-white px-2 py-1 rounded text-xs">Opt</span>ミュウツーサブレ
             </h1>
           </header>
 
-          {/* Main Content Area */}
-          <main className="flex-1 overflow-y-auto pb-20">
-            {activeTab === 'nav' && <NavigationMode inventory={inventory} />}
-            {activeTab === 'sim' && <SimulationMode inventory={inventory} />}
-            {activeTab === 'inv' && <InventoryMode inventory={inventory} setInventory={setInventory} />}
-          </main>
-
-          {/* Bottom Tab Navigation */}
-          <nav className="bg-white border-t border-gray-200 fixed bottom-0 w-full max-w-md pb-safe">
-            <div className="flex justify-around">
-              <button onClick={() => setActiveTab('nav')} className={`flex-1 py-4 text-xs font-bold flex flex-col items-center gap-1 ${activeTab === 'nav' ? 'text-purple-600' : 'text-gray-400'}`}>
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                ナビ
-              </button>
-              <button onClick={() => setActiveTab('sim')} className={`flex-1 py-4 text-xs font-bold flex flex-col items-center gap-1 ${activeTab === 'sim' ? 'text-purple-600' : 'text-gray-400'}`}>
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                期待値
-              </button>
-              <button onClick={() => setActiveTab('inv')} className={`flex-1 py-4 text-xs font-bold flex flex-col items-center gap-1 ${activeTab === 'inv' ? 'text-purple-600' : 'text-gray-400'}`}>
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                設定/所持品
-              </button>
+          <main className="flex-1 overflow-y-auto p-4 space-y-4 pb-10">
+            {/* インベントリ領域 */}
+            <div className="bg-white rounded-2xl shadow-sm p-4">
+              <h2 className="text-sm font-bold text-gray-500 mb-3">サブレ所持数 (自動保存＆即時反映)</h2>
+              <div className="space-y-2">
+                <InputRow id="s6" label="ミュウツー (6)" isS6={true} />
+                <InputRow id="s5" label="ハイパー (5)" isS6={false} />
+                <InputRow id="s4" label="ボーナス+ (4)" isS6={false} />
+                <InputRow id="s3" label="スーパー (3)" isS6={false} />
+                <InputRow id="s1" label="ポケ (1)" isS6={false} />
+              </div>
             </div>
-          </nav>
+
+            {/* シミュレーション領域 */}
+            <div className="bg-white rounded-2xl shadow-sm p-5 border-t-4 border-purple-600">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-600 font-bold">フレンドポイント</span>
+                <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3 mb-5 overflow-hidden">
+                <div className="bg-purple-600 h-3 rounded-full transition-all duration-500 ease-out" style={{ width: `${(gauge / 30) * 100}%` }}></div>
+              </div>
+
+              <div className="flex gap-4 mb-4 bg-purple-50 p-3 rounded-xl border border-purple-100">
+                <label className="flex items-center space-x-2 text-sm font-bold text-purple-900 w-full cursor-pointer">
+                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0} />
+                  <span>チャンス状態 (1投目のみ)</span>
+                </label>
+              </div>
+
+              <div className="flex justify-between items-center mb-1 text-sm font-medium text-gray-700">
+                <span>確定ライン:</span>
+                <select value={guaranteedCount} onChange={(e) => setGuaranteedCount(Number(e.target.value))} className="border-gray-300 rounded shadow-sm focus:ring-purple-500 p-1 bg-gray-50">
+                  <option value={3}>3枚 (通常)</option>
+                  <option value={2}>2枚</option>
+                </select>
+              </div>
+              <p className="text-xs text-gray-400 text-right mb-4">現在 {fedCount} 枚目（{fedCount >= guaranteedCount ? '⚠️満腹リスクあり' : '✅確定ライン'}）</p>
+
+              {/* 結果表示・操作パネル */}
+              <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100">
+                <p className="text-xs text-gray-500 font-bold mb-1">計算された最適解</p>
+                <p className="text-3xl font-black text-purple-900 mb-5">{bestMove.type}</p>
+                
+                {bestMove.type !== '完了' && bestMove.type !== '在庫なし' && (
+                  <>
+                    <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数も自動で減ります）</p>
+                    <div className="grid grid-cols-2 gap-2 mb-2">
+                      <button onClick={() => handleThrow(1)} className="bg-white border border-purple-200 text-purple-700 py-3 rounded-xl font-bold active:bg-purple-100 shadow-sm transition-transform active:scale-95">通常</button>
+                      <button onClick={() => handleThrow(3)} className="bg-purple-600 text-white py-3 rounded-xl font-bold active:bg-purple-700 shadow-sm transition-transform active:scale-95">大成功 (3倍)</button>
+                      <button onClick={() => handleThrow(30)} className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-3 rounded-xl font-bold active:opacity-80 shadow-sm transition-transform active:scale-95">超成功 (一発)</button>
+                      <button onClick={() => handleThrow(0)} className="bg-gray-400 text-white py-3 rounded-xl font-bold active:bg-gray-500 shadow-sm transition-transform active:scale-95">満腹 (逃走)</button>
+                    </div>
+                  </>
+                )}
+              </div>
+              <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 transition-colors">次の出会いへリセット</button>
+            </div>
+          </main>
         </div>
       );
     };
