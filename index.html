@@ -544,7 +544,9 @@
           else if (rem >= 13 && rem <= 15) id = 's4';
           else if (rem >= 9 && rem <= 12) id = 's1';
           else if (rem >= 7 && rem <= 8) id = 's4';
-          else if (rem === 6) id = 's6';
+          // 最新版X記事の「残り6の小技」は、6を固定せず
+          // 1→1で大成功・超成功による6節約も含めてDP比較する。
+          else if (rem === 6) return -1;
         }
 
         if (!id) return -1;
@@ -616,7 +618,12 @@
 
         const remainingGauge = TARGET - cg;
         const normalNonChance = !cChance;
-        const isPokeCentered = !countAvailable(s5) && !countAvailable(s3);
+        // X記事では3タイプは固定分類ではなく、手持ちに応じて行き来する。
+        // ハイパーが無く、スーパーが残り遭遇数より少ない有限在庫なら、
+        // 「ポケ中心寄り」とみなし、16〜18でも6温存との比較を許す。
+        // スーパー無限、または各残り遭遇に1枚以上回せる在庫ならスーパー中心扱いを維持する。
+        const finiteSuper = s3 !== -1 ? Math.max(0, s3) : Infinity;
+        const isPokeCentered = !countAvailable(s5) && finiteSuper < ce;
 
         // 最新版X.pdfの「保証が残り1枚」の意味に限定する。
         // 以前のように「保証が残り1枚なら当日捕獲率を最大化」するのではなく、
