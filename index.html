@@ -181,7 +181,11 @@
           if (!res || !res.action) break;
           
           route.push(res.action.name);
-          currG += res.action.val;
+          
+          // チャンス時は1投目が必ず大成功(3倍)になる仕様をルート計算に反映
+          const multiplier = currChance ? 3 : 1;
+          currG += res.action.val * multiplier;
+          
           currF++;
           currChance = false;
           if (currInv[res.action.id] !== '∞') currInv[res.action.id]--;
@@ -258,6 +262,12 @@
         const actId = currentBestMove.id;
         if (!actId) return;
 
+        // チャンス時の「通常」タップを「大成功(3倍)」に強制上書き
+        let actualMultiplier = multiplier;
+        if (isChance && multiplier === 1) {
+          actualMultiplier = 3;
+        }
+
         setHistory(prev => [...prev, {
           gauge,
           fedCount,
@@ -267,7 +277,7 @@
         }]);
 
         let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? 4 : actId === 's3' ? 3 : 1;
-        let added = multiplier === 30 ? 30 : val * multiplier;
+        let added = actualMultiplier === 30 ? 30 : val * actualMultiplier;
 
         if (inventory[actId] !== '∞') {
           const nextCount = Math.max(0, inventory[actId] - 1);
@@ -489,7 +499,6 @@
                   <button onClick={applySettings} className="w-full bg-purple-600 text-white py-3 rounded-xl font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-transform text-lg">
                     設定を適用して再計算
                   </button>
-                  <p className="text-center text-xs text-red-500 mt-2 font-bold">※適用ボタンを押すまで上の計算には反映されません</p>
                 </div>
               )}
             </div>
