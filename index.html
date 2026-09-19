@@ -172,16 +172,19 @@
         return [ns6, ns5, ns4, ns3, ns1];
       };
 
+      // PDF準拠ポリシーは「最初の3枚を必ず食べる」というPDF本文の前提にだけ適用する。
+      // UIの「2枚」はカスタム条件として計算できるが、PDF固有の行動ルールは強制しない。
+      const pdfStandardMode = ctx.guar === 3;
+      const guaranteePlanMemo = new Map();
+
       // PDF準拠の「確定取り切り」判定。
       // 残っている確定給餌回数の中で、最悪ケース（通常成功）でもゲージ30へ
-      // 到達できるなら、その確定ルートを途中で捨てる行動や翌日送りを禁止する。
+      // 到達できるなら、その日のうちに取り切れる状態とみなす。
       // チャンス1投目は超成功でなくても必ず3倍なので、最低獲得量を3倍として扱う。
       const maxGuaranteedGain = (cp, cChance, s6, s5, s4, s3, s1) => {
         const throwsLeft = Math.max(0, ctx.guar - cp);
         if (throwsLeft <= 0) return 0;
 
-        // 確定給餌は通常3回までなので、配列生成やsortを使わず5種類だけを直接走査する。
-        // これにより、確定取り切り制約を追加しても14回ケースのDP速度を大きく落とさない。
         const topNormalGain = (limit, cs6, cs5, cs4, cs3, cs1) => {
           let total = 0;
           let c6 = cs6, c5 = cs5, c4 = cs4, c3 = cs3, c1 = cs1;
@@ -209,7 +212,6 @@
           return topNormalGain(throwsLeft, s6, s5, s4, s3, s1);
         }
 
-        // チャンス1投目だけは3倍対象が変わるため、5種類の初手だけを比較する。
         let best = 0;
         for (let ai = 0; ai < actions.length; ai++) {
           const a = actions[ai];
@@ -226,6 +228,96 @@
         if (cg >= TARGET) return true;
         if (cp >= ctx.guar) return false;
         return cg + maxGuaranteedGain(cp, cChance, s6, s5, s4, s3, s1) >= TARGET;
+      };
+
+      // 「確定で取り切れる」ルートが複数ある場合のPDF寄りの優先順位。
+      // PDFの表から読み取れる優先は、6を最も温存し、次に5、次に通常の3を温存。
+      // 低コスト側では 1 を1点、日次で戻るボーナスを2点として扱うと、
+      // 例示されている「1〜2なら1」「3〜4なら4」「5なら1→4」も同時に再現できる。
+      const planResourceScore = (counts) => [
+        counts.s6,
+        counts.s5,
+        counts.s3,
+        counts.s1 + counts.s4 * 2
+      ];
+
+      const compareSeq = (seqA, seqB) => {
+        const n = Math.min(seqA.length, seqB.length);
+        for (let i = 0; i < n; i++) {
+          const a = actions[seqA[i]];
+          const b = actions[seqB[i]];
+          if (a.val !== b.val) return a.val - b.val; // PDFの「小さい数字から」
+          const ar = tieRank(a), br = tieRank(b);
+          if (ar !== br) return ar - br;
+        }
+        return seqA.length - seqB.length;
+      };
+
+      const compareGuaranteedPlans = (a, b) => {
+        if (!b) return -1;
+        const as = planResourceScore(a.counts);
+        const bs = planResourceScore(b.counts);
+        for (let i = 0; i < as.length; i++) {
+          if (as[i] !== bs[i]) return as[i] - bs[i];
+        }
+        return compareSeq(a.seq, b.seq);
+      };
+
+      const addPlanAction = (ai, child) => {
+        const a = actions[ai];
+        const counts = child ? { ...child.counts } : { s6: 0, s5: 0, s4: 0, s3: 0, s1: 0 };
+        counts[a.id]++;
+        return {
+          counts,
+          seq: [ai, ...(child ? child.seq : [])]
+        };
+      };
+
+      const bestGuaranteedPlan = (cg, cp, cChance, s6, s5, s4, s3, s1) => {
+        if (!pdfStandardMode || cg >= TARGET || cp >= ctx.guar) return null;
+        if (!canGuaranteeCatch(cg, cp, cChance, s6, s5, s4, s3, s1)) return null;
+
+        const key = `${cg}|${cp}|${cChance ? 1 : 0}|${s6}|${s5}|${s4}|${s3}|${s1}`;
+        if (guaranteePlanMemo.has(key)) return guaranteePlanMemo.get(key);
+
+        const throwsLeft = ctx.guar - cp;
+        let best = null;
+
+        for (let ai = 0; ai < actions.length; ai++) {
+          const a = actions[ai];
+          const count = getCount(a.id, s6, s5, s4, s3, s1);
+          if (count === 0) continue;
+
+          const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+          const minMultiplier = (cChance && cp === 0) ? 3 : 1;
+          const ng = Math.min(TARGET, cg + a.val * minMultiplier);
+          const np = Math.min(ctx.guar, cp + 1);
+
+          let child = null;
+          if (ng < TARGET) {
+            child = bestGuaranteedPlan(ng, np, false, ns6, ns5, ns4, ns3, ns1);
+            if (!child) continue;
+          }
+
+          const candidate = addPlanAction(ai, child);
+
+          if (throwsLeft === 1) {
+            // PDFの「確定給餌が残り1枚」のうち、1投で確実に届く場合は
+            // 希少度よりも「必要量を満たす一番小さいサブレ」を優先する。
+            // 例: 残り2なら1を重ねるのではなく、保証された最後の1投で3を使って100%。
+            if (!best) {
+              best = candidate;
+            } else {
+              const ba = actions[best.seq[0]];
+              if (a.val < ba.val || (a.val === ba.val && tieRank(a) < tieRank(ba))) best = candidate;
+            }
+          } else if (compareGuaranteedPlans(candidate, best) < 0) {
+            best = candidate;
+          }
+        }
+
+        guaranteePlanMemo.set(key, best);
+        return best;
       };
 
       const memoKey = (cg, cp, cChance, s6, s5, s4, s3, s1, ce) => {
@@ -263,13 +355,22 @@
         if (hit !== undefined) return hit;
 
         const passEV = nextEncounterEV(cg, s6, s5, s3, s1, ce);
-        const mustFinishNow = canGuaranteeCatch(cg, cp, cChance, s6, s5, s4, s3, s1);
+        const guaranteedPlan = pdfStandardMode
+          ? bestGuaranteedPlan(cg, cp, cChance, s6, s5, s4, s3, s1)
+          : null;
+        const mustFinishNow = !!guaranteedPlan;
 
-        // PDFでは、確定給餌回数だけで取り切れる状態に入ったら、その日のうちに
-        // 100%捕獲できるルートを優先する。したがって、この状態では翌日送りを候補から外す。
-        let bestEV = mustFinishNow ? -Infinity : passEV;
-        let bestAction = mustFinishNow ? -3 : -2; // -3 = 確定取り切り候補未選択
-        let bestCatchProb = 0;
+        // PDFの例外3: 「確実に食べる残りが1枚」かつ、その1枚だけでは確定捕獲できない場合は、
+        // イベント全体EVよりも“この回の捕獲確率”を優先して初手を選ぶ。
+        // 例: 残り16なら5より6（PDF記載 41%→45%）。
+        const oneGuaranteedLeftException = pdfStandardMode
+          && cp === ctx.guar - 1
+          && !mustFinishNow;
+
+        // PDF準拠ポリシー中は翌日送りを候補から外す。2枚設定はカスタム条件なので通常EV最適化。
+        let bestEV = (mustFinishNow || oneGuaranteedLeftException) ? -Infinity : passEV;
+        let bestAction = mustFinishNow ? -3 : (oneGuaranteedLeftException ? -4 : -2);
+        let bestCatchProb = oneGuaranteedLeftException ? -1 : 0;
         const eatProb = cp >= ctx.guar ? 0.6 : 1.0;
 
         for (let ai = 0; ai < actions.length; ai++) {
@@ -286,14 +387,10 @@
 
           const np = Math.min(ctx.guar, cp + 1);
 
-          if (mustFinishNow) {
-            // 確定取り切り中は、最悪ケースでもこの一手の後に100%捕獲ルートが
-            // 残る行動だけを許可する。チャンス1投目は最低3倍、それ以外は最低1倍。
-            const minMultiplier = (cChance && cp === 0) ? 3 : 1;
-            const worstCaseG = Math.min(TARGET, cg + a.val * minMultiplier);
-            const preservesGuarantee = worstCaseG >= TARGET
-              || canGuaranteeCatch(worstCaseG, np, false, ns6, ns5, ns4, ns3, ns1);
-            if (!preservesGuarantee) continue;
+          if (mustFinishNow && ai !== guaranteedPlan.seq[0]) {
+            // 100%ルート同士でも、PDFの在庫節約方針（6→5→通常3の順に温存）と
+            // 「小さい数字から」を優先して選んだルートの初手だけを許可する。
+            continue;
           }
 
           const evAfterEat = (ng) => {
@@ -330,7 +427,20 @@
           const expectedValue = eatProb * eatEV + (1 - eatProb) * passEV;
           const currentCatchProb = eatProb * eatCatchProb;
 
-          if (expectedValue > bestEV + EPS) {
+          if (oneGuaranteedLeftException) {
+            // この例外状態だけは、PDFどおり「この回の捕獲確率」を最優先。
+            // 同率ならイベント全体EV、その後に通常の小さいサブレ優先で決める。
+            if (currentCatchProb > bestCatchProb + EPS
+                || (Math.abs(currentCatchProb - bestCatchProb) <= EPS && expectedValue > bestEV + EPS)
+                || (Math.abs(currentCatchProb - bestCatchProb) <= EPS
+                    && Math.abs(expectedValue - bestEV) <= EPS
+                    && bestAction >= 0
+                    && tieRank(a) < tieRank(actions[bestAction]))) {
+              bestEV = expectedValue;
+              bestAction = ai;
+              bestCatchProb = currentCatchProb;
+            }
+          } else if (expectedValue > bestEV + EPS) {
             bestEV = expectedValue;
             bestAction = ai;
             bestCatchProb = currentCatchProb;
@@ -346,7 +456,7 @@
 
         // mustFinishNow=true なら理論上必ず候補が1つ以上ある。万一入力の不整合等で
         // 候補が見つからなかった場合だけ安全側で従来の翌日送りへフォールバックする。
-        if (bestAction === -3) {
+        if (bestAction === -3 || bestAction === -4) {
           bestEV = passEV;
           bestAction = -2;
           bestCatchProb = 0;
