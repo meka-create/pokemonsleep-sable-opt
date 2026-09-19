@@ -613,37 +613,59 @@
         const guaranteedPlan = pdfStandardMode
           ? bestGuaranteedPlan(cg, cp, cChance, s6, s5, s4, s3, s1)
           : null;
-        const mustFinishNow = !!guaranteedPlan;
-
-        // PDFの例外3: 「確実に食べる残りが1枚」かつ、その1枚だけでは確定捕獲できない場合は、
-        // イベント全体EVよりも“この回の捕獲確率”を優先して初手を選ぶ。
-        // 例: 残り16なら5より6（PDF記載 41%→45%）。
-        const oneGuaranteedLeftException = pdfStandardMode
-          && cp === ctx.guar - 1
-          && !mustFinishNow;
 
         const remainingGauge = TARGET - cg;
         const normalNonChance = !cChance;
-        // PDFルール: 残り19以上では6を温存。ただし最終日・6が余りそうな時は6から。
-        // 「確定給餌が残り1枚」の例外は、この温存ルールより優先する。
+        const isPokeCentered = !countAvailable(s5) && !countAvailable(s3);
+
+        // 最新版X.pdfの「保証が残り1枚」の意味に限定する。
+        // 以前のように「保証が残り1枚なら当日捕獲率を最大化」するのではなく、
+        // “その確定1枚だけで捕まえ切れるサブレがある”場合にだけ確定捕獲を優先する。
+        // （この場合は bestGuaranteedPlan 自体が1投完結ルートを返す。）
+        const oneGuaranteedLeftException = pdfStandardMode
+          && cp === ctx.guar - 1
+          && actions.some((a) => {
+            const count = getCount(a.id, s6, s5, s4, s3, s1);
+            if (count === 0) return false;
+            const guaranteedMult = (cChance && cp === 0) ? 3 : 1;
+            return cg + a.val * guaranteedMult >= TARGET;
+          });
+
+        // X.pdfでは、ポケサブレ中心で遭遇がまだ残る場合、残り16〜18でも
+        // 6を温存した方が有利になる例がある。ここでは取り切りをハード制約にせず、
+        // DPに「今取る」対「温存する」を比較させる。最終遭遇と、最後の確定1投で
+        // そのまま捕獲できる場合は従来どおり取り切りを優先する。
+        const allowPokeEarlyPreserveComparison = pdfStandardMode
+          && !!guaranteedPlan
+          && isPokeCentered
+          && normalNonChance
+          && remainingGauge >= 16
+          && remainingGauge <= 18
+          && ce > 1
+          && !oneGuaranteedLeftException;
+        const mustFinishNow = !!guaranteedPlan && !allowPokeEarlyPreserveComparison;
+
+        // 残り19以上では基本的に6を温存する。ただし最終遭遇や「6が余りそう」の
+        // 目安に達した時は“6禁止を解除”するだけに留め、6を強制はしない。
+        // 解除後は6を含む全候補をDPで比較する。
         const inS6PreserveZone = pdfStandardMode
           && normalNonChance
-          && remainingGauge >= 19
-          && !oneGuaranteedLeftException;
-        const forceS6ForPdfException = inS6PreserveZone
+          && remainingGauge >= 19;
+        const allowS6ByPdfException = inS6PreserveZone
           && countAvailable(s6)
           && (ce <= 1 || isS6Surplus(ce, s6, s5, s3));
-        const preserveS6 = inS6PreserveZone && !forceS6ForPdfException;
+        const preserveS6 = inS6PreserveZone && !allowS6ByPdfException;
 
         // PDF掲載表の開始条件に一致する時だけ、その表の初手を優先する。
         const pdfPreferredAi = mustFinishNow
           ? pdfStartPreferredAction(cg, cp, cChance, s6, s5, s4, s3, s1)
           : -1;
 
-        // PDF準拠ポリシー中は翌日送りを候補から外す。2枚設定はカスタム条件なので通常EV最適化。
-        let bestEV = (mustFinishNow || oneGuaranteedLeftException || forceS6ForPdfException) ? -Infinity : passEV;
-        let bestAction = mustFinishNow ? -3 : (oneGuaranteedLeftException ? -4 : (forceS6ForPdfException ? -5 : -2));
-        let bestCatchProb = oneGuaranteedLeftException ? -1 : 0;
+        // 取り切りをハード制約にする状態だけ翌日送りを候補から外す。
+        // ポケ中心16〜18の温存比較と、6余り目安到達後は通常のDP比較に戻す。
+        let bestEV = mustFinishNow ? -Infinity : passEV;
+        let bestAction = mustFinishNow ? -3 : -2;
+        let bestCatchProb = 0;
         const eatProb = cp >= ctx.guar ? 0.6 : 1.0;
 
         for (let ai = 0; ai < actions.length; ai++) {
@@ -660,7 +682,6 @@
 
           const np = Math.min(ctx.guar, cp + 1);
 
-          if (forceS6ForPdfException && a.id !== 's6') continue;
           if (preserveS6 && a.id === 's6') continue;
 
           if (mustFinishNow) {
@@ -702,20 +723,7 @@
           const expectedValue = eatProb * eatEV + (1 - eatProb) * passEV;
           const currentCatchProb = eatProb * eatCatchProb;
 
-          if (oneGuaranteedLeftException) {
-            // この例外状態だけは、PDFどおり「この回の捕獲確率」を最優先。
-            // 同率ならイベント全体EV、その後に通常の小さいサブレ優先で決める。
-            if (currentCatchProb > bestCatchProb + EPS
-                || (Math.abs(currentCatchProb - bestCatchProb) <= EPS && expectedValue > bestEV + EPS)
-                || (Math.abs(currentCatchProb - bestCatchProb) <= EPS
-                    && Math.abs(expectedValue - bestEV) <= EPS
-                    && bestAction >= 0
-                    && tieRank(a) < tieRank(actions[bestAction]))) {
-              bestEV = expectedValue;
-              bestAction = ai;
-              bestCatchProb = currentCatchProb;
-            }
-          } else if (expectedValue > bestEV + EPS) {
+          if (expectedValue > bestEV + EPS) {
             bestEV = expectedValue;
             bestAction = ai;
             bestCatchProb = currentCatchProb;
@@ -731,7 +739,7 @@
 
         // mustFinishNow=true なら理論上必ず候補が1つ以上ある。万一入力の不整合等で
         // 候補が見つからなかった場合だけ安全側で従来の翌日送りへフォールバックする。
-        if (bestAction === -3 || bestAction === -4 || bestAction === -5) {
+        if (bestAction === -3) {
           bestEV = passEV;
           bestAction = -2;
           bestCatchProb = 0;
