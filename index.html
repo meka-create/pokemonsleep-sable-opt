@@ -516,7 +516,9 @@
                   <option value={2}>2枚</option>
                 </select>
               </div>
-              <p className="text-xs text-gray-400 text-right mb-4">現在 {fedCount} 枚目（{fedCount >= guaranteedCount ? '⚠️満腹リスクあり' : '✅確定ライン'}）</p>
+              
+              {/* 表示を「現在 1 枚目」からスタートするように修正 */}
+              <p className="text-xs text-gray-400 text-right mb-4">現在 {fedCount + 1} 枚目（{fedCount >= guaranteedCount ? '⚠️満腹リスクあり' : '✅確定ライン'}）</p>
 
               <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100">
                 <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
