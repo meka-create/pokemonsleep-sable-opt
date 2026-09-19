@@ -54,6 +54,9 @@
       const [fedCount, setFedCount] = useState(0);
       const [guaranteedCount, setGuaranteedCount] = useState(3);
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
+      
+      // 戻る(Undo)機能のための履歴State
+      const [history, setHistory] = useState([]);
 
       // 入力ハンドラ
       const handleFormChange = (id, value) => {
@@ -110,7 +113,6 @@
           let bestAct = null;
           let bestProb = 0;
 
-          // PDFの「4枚目以降は毎回60%で食べる」を正確に反映
           const currentEatProb = (cf >= guar) ? 0.6 : 1.0;
           const currentRejectProb = 1.0 - currentEatProb;
           const rejectEv = cg * GAUGE_VALUE; 
@@ -225,14 +227,11 @@
                 else if (r < 0.10) multiplier = 3;
               }
 
-              // 満腹判定（食べるかどうかの判定を先に行う）
               if (sf >= 3 && Math.random() < 0.4) {
                 active = false; 
-                // 食べなかったので消費しない
                 break;
               }
 
-              // 食べたので消費する
               if (simInv[action.id] !== '∞') simInv[action.id]--;
 
               simGauge = Math.min(30, simGauge + action.val * multiplier);
@@ -254,12 +253,21 @@
       // --- アクションハンドラ ---
       const handleThrow = (multiplier) => {
         if (multiplier === 0) {
-          alert("満腹になりました。今日の判定は終了です。リセットを押して次回に備えてください。");
+          alert("満腹になりました。今日の判定は終了です。リセットまたは次の出会いへ進んでください。");
           return;
         }
         
         const actId = currentBestMove.id;
         if (!actId) return;
+
+        // 投げる前の状態を履歴に保存 (Undo用)
+        setHistory(prev => [...prev, {
+          gauge,
+          fedCount,
+          isChance,
+          inventory: { ...inventory },
+          formData: { ...formData }
+        }]);
 
         let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? 4 : actId === 's3' ? 3 : 1;
         let added = multiplier === 30 ? 30 : val * multiplier;
@@ -275,17 +283,51 @@
         setIsChance(false);
       };
 
+      // 1手戻る (Undo) 処理
+      const undoMove = () => {
+        if (history.length === 0) return;
+        const last = history[history.length - 1];
+        setGauge(last.gauge);
+        setFedCount(last.fedCount);
+        setIsChance(last.isChance);
+        setInventory(last.inventory);
+        setFormData(last.formData);
+        // 履歴から最新のものを削除
+        setHistory(prev => prev.slice(0, -1));
+      };
+
+      // ゲージのみのリセット
+      const resetGaugeOnly = () => {
+        if (window.confirm("フレンドポイントと食べた枚数を0にリセットしますか？")) {
+          setGauge(0);
+          setFedCount(0);
+          setIsChance(false);
+          setHistory([]);
+        }
+      };
+
+      // 次の出会いへ進む
       const resetEncounter = () => {
         if (gauge >= 30) {
           setGauge(0);
         }
         setFedCount(0);
         setIsChance(false);
-        if (inventory.encounters > 0) {
-          const nextEnc = inventory.encounters - 1;
-          setInventory(prev => ({ ...prev, encounters: nextEnc }));
-          setFormData(prev => ({ ...prev, encounters: nextEnc }));
-        }
+        setHistory([]);
+
+        setInventory(prev => {
+          const next = { ...prev };
+          if (next.encounters > 0) next.encounters -= 1;
+          next.s4 = 1; // ボーナスサブレ自動回復
+          return next;
+        });
+
+        setFormData(prev => {
+          const next = { ...prev };
+          if (next.encounters > 0) next.encounters -= 1;
+          next.s4 = 1; // ボーナスサブレ自動回復
+          return next;
+        });
       };
 
       // --- UI Components ---
@@ -333,10 +375,17 @@
             
             <div className="bg-white rounded-2xl shadow-sm p-5 border-t-4 border-purple-600">
               <h2 className="text-sm font-bold text-gray-500 mb-4">実践シミュレーター</h2>
+              
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-gray-600 font-bold">フレンドポイント</span>
-                <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={resetGaugeOnly} className="text-xs bg-gray-200 px-2 py-1 rounded font-bold text-gray-600 active:bg-gray-300 hover:bg-gray-300 transition-colors">
+                    0にリセット
+                  </button>
+                  <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
+                </div>
               </div>
+              
               <div className="w-full bg-gray-200 rounded-full h-3 mb-5 overflow-hidden">
                 <div className="bg-purple-600 h-3 rounded-full transition-all duration-500 ease-out" style={{ width: `${(Math.min(30, gauge) / 30) * 100}%` }}></div>
               </div>
@@ -395,6 +444,14 @@
                       <button onClick={() => handleThrow(30)} className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-3 rounded-xl font-bold active:opacity-80 shadow-sm transition-transform active:scale-95">超成功 (一発)</button>
                       <button onClick={() => handleThrow(0)} className="bg-gray-400 text-white py-3 rounded-xl font-bold active:bg-gray-500 shadow-sm transition-transform active:scale-95">満腹 (逃走)</button>
                     </div>
+                    
+                    {/* Undoボタン (履歴がある場合のみ表示) */}
+                    {history.length > 0 && (
+                      <button onClick={undoMove} className="w-full mt-2 py-2 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+                        1手戻る (誤タップ修正)
+                      </button>
+                    )}
                   </>
                 )}
               </div>
