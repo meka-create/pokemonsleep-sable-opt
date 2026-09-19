@@ -27,10 +27,385 @@
 <body>
   <div id="root"></div>
 
-  <script type="text/babel">
-    const { useState, useEffect, useMemo, useCallback } = React;
+  <script id="solver-worker" type="javascript/worker">
+    'use strict';
 
-    const globalDpMemo = new Map();
+    self.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.type !== 'solve') return;
+
+      const startedAt = performance.now();
+      try {
+        const context = makeContext({
+          premium: !!msg.premium,
+          guaranteedCount: msg.guaranteedCount,
+          maxEncounters: msg.state?.encounters,
+          inventory: msg.state?.inventory || {}
+        });
+        const result = solve(context, msg.state || {});
+        result.calcMs = performance.now() - startedAt;
+        self.postMessage({ type: 'result', requestId: msg.requestId, result });
+      } catch (error) {
+        self.postMessage({
+          type: 'error',
+          requestId: msg.requestId,
+          message: error && error.stack ? error.stack : String(error)
+        });
+      }
+    };
+
+    function makeContext(cfg) {
+      const premium = !!cfg.premium;
+      const guar = Math.max(1, Math.floor(Number(cfg.guaranteedCount) || 3));
+      const maxEnc = Math.max(0, Math.floor(Number(cfg.maxEncounters) || 0));
+      const values = { s6: 6, s5: 5, s4: premium ? 4 : 3, s3: 3, s1: 1 };
+      const ids = ['s6', 's5', 's4', 's3', 's1'];
+      const maxCounts = {};
+      const isInf = {};
+
+      for (const id of ids) {
+        const raw = cfg.inventory?.[id];
+        isInf[id] = raw === '∞';
+        if (isInf[id]) {
+          maxCounts[id] = 0;
+          continue;
+        }
+
+        const n = Math.max(0, Math.floor(Number(raw) || 0));
+        if (id === 's4') {
+          // ボーナスサブレはUI上も1枚が上限で、次の出会いで1枚に戻る。
+          maxCounts[id] = Math.min(n, 1);
+        } else {
+          // 厳密な上限。1回の捕獲までに、この種類だけを通常成功で投げ続けても
+          // ceil(30 / value)枚で必ずゲージ30に到達する。
+          // 捕獲できる回数は残り出会い回数を超えないため、これを超える在庫は
+          // イベント中に物理的に消費できず、最適行動にも影響しない。
+          const horizonCap = maxEnc * Math.ceil(30 / values[id]);
+          maxCounts[id] = Math.min(n, horizonCap);
+        }
+      }
+
+      const radix = {
+        phase: guar + 1,
+        s6: isInf.s6 ? 1 : maxCounts.s6 + 1,
+        s5: isInf.s5 ? 1 : maxCounts.s5 + 1,
+        s4: 2,
+        s3: isInf.s3 ? 1 : maxCounts.s3 + 1,
+        s1: isInf.s1 ? 1 : maxCounts.s1 + 1,
+        enc: maxEnc + 1
+      };
+
+      // 通常の14回ケースではNumberの整数キーで安全に一意化できる。
+      // 極端に大きいユーザー入力だけ文字列キーへ自動フォールバックする。
+      let keySpace = 31 * radix.phase * 2;
+      keySpace *= radix.s6 * radix.s5 * radix.s4 * radix.s3 * radix.s1 * radix.enc;
+      const useNumericKey = Number.isSafeInteger(keySpace) && keySpace <= Number.MAX_SAFE_INTEGER;
+
+      return {
+        premium,
+        guar,
+        maxEnc,
+        values,
+        isInf,
+        maxCounts,
+        radix,
+        useNumericKey,
+        memo: new Map()
+      };
+    }
+
+    function solve(ctx, input) {
+      const EPS = 1e-12;
+      const TARGET = 30;
+
+      const clampCount = (id, raw) => {
+        if (ctx.isInf[id]) return -1; // -1 = 無限
+        const n = Math.max(0, Math.floor(Number(raw) || 0));
+        return Math.min(n, ctx.maxCounts[id]);
+      };
+
+      const inv = input.inventory || {};
+      const startInv = {
+        s6: clampCount('s6', inv.s6),
+        s5: clampCount('s5', inv.s5),
+        s4: Math.max(0, Math.min(1, Math.floor(Number(inv.s4) || 0))),
+        s3: clampCount('s3', inv.s3),
+        s1: clampCount('s1', inv.s1)
+      };
+
+      const g = Math.max(0, Math.min(TARGET, Math.floor(Number(input.gauge) || 0)));
+      // cf >= guar では以後の満腹確率が常に同じなので、guar+1個の状態に厳密圧縮できる。
+      const phase = Math.max(0, Math.min(ctx.guar, Math.floor(Number(input.fedCount) || 0)));
+      const enc = Math.max(0, Math.min(ctx.maxEnc, Math.floor(Number(input.encounters) || 0)));
+      const chance = !!input.chance && phase === 0;
+
+      const actions = [
+        { id: 's1', val: 1, name: 'ポケ(1)' },
+        { id: 's3', val: 3, name: 'スーパー(3)' },
+        { id: 's4', val: ctx.values.s4, name: ctx.premium ? 'ボーナス+(4)' : 'ボーナス(3)' },
+        { id: 's5', val: 5, name: 'ハイパー(5)' },
+        { id: 's6', val: 6, name: 'ミュウツー(6)' }
+      ];
+
+      // index_logic_fixed.html と同じ同値時ルール。
+      const tieRank = (a) => a.val * 10 + (a.id === 's4' ? 0 : 1);
+      const encoded = (id, value) => ctx.isInf[id] ? 0 : value;
+
+      const getCount = (id, s6, s5, s4, s3, s1) => {
+        if (id === 's6') return s6;
+        if (id === 's5') return s5;
+        if (id === 's4') return s4;
+        if (id === 's3') return s3;
+        return s1;
+      };
+
+      const decrementForAction = (id, s6, s5, s4, s3, s1) => {
+        let ns6 = s6, ns5 = s5, ns4 = s4, ns3 = s3, ns1 = s1;
+        const count = getCount(id, s6, s5, s4, s3, s1);
+        if (count !== -1) {
+          if (id === 's6') ns6--;
+          else if (id === 's5') ns5--;
+          else if (id === 's4') ns4--;
+          else if (id === 's3') ns3--;
+          else ns1--;
+        }
+        return [ns6, ns5, ns4, ns3, ns1];
+      };
+
+      // PDF準拠の「確定取り切り」判定。
+      // 残っている確定給餌回数の中で、最悪ケース（通常成功）でもゲージ30へ
+      // 到達できるなら、その確定ルートを途中で捨てる行動や翌日送りを禁止する。
+      // チャンス1投目は超成功でなくても必ず3倍なので、最低獲得量を3倍として扱う。
+      const maxGuaranteedGain = (cp, cChance, s6, s5, s4, s3, s1) => {
+        const throwsLeft = Math.max(0, ctx.guar - cp);
+        if (throwsLeft <= 0) return 0;
+
+        // 確定給餌は通常3回までなので、配列生成やsortを使わず5種類だけを直接走査する。
+        // これにより、確定取り切り制約を追加しても14回ケースのDP速度を大きく落とさない。
+        const topNormalGain = (limit, cs6, cs5, cs4, cs3, cs1) => {
+          let total = 0;
+          let c6 = cs6, c5 = cs5, c4 = cs4, c3 = cs3, c1 = cs1;
+          for (let t = 0; t < limit; t++) {
+            let bestId = null;
+            let bestVal = -1;
+            if (c6 !== 0 && 6 > bestVal) { bestId = 's6'; bestVal = 6; }
+            if (c5 !== 0 && 5 > bestVal) { bestId = 's5'; bestVal = 5; }
+            if (c4 !== 0 && ctx.values.s4 > bestVal) { bestId = 's4'; bestVal = ctx.values.s4; }
+            if (c3 !== 0 && 3 > bestVal) { bestId = 's3'; bestVal = 3; }
+            if (c1 !== 0 && 1 > bestVal) { bestId = 's1'; bestVal = 1; }
+            if (bestId === null) break;
+
+            total += bestVal;
+            if (bestId === 's6' && c6 !== -1) c6--;
+            else if (bestId === 's5' && c5 !== -1) c5--;
+            else if (bestId === 's4' && c4 !== -1) c4--;
+            else if (bestId === 's3' && c3 !== -1) c3--;
+            else if (bestId === 's1' && c1 !== -1) c1--;
+          }
+          return total;
+        };
+
+        if (!(cChance && cp === 0)) {
+          return topNormalGain(throwsLeft, s6, s5, s4, s3, s1);
+        }
+
+        // チャンス1投目だけは3倍対象が変わるため、5種類の初手だけを比較する。
+        let best = 0;
+        for (let ai = 0; ai < actions.length; ai++) {
+          const a = actions[ai];
+          const count = getCount(a.id, s6, s5, s4, s3, s1);
+          if (count === 0) continue;
+          const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+          const gain = a.val * 3 + topNormalGain(throwsLeft - 1, ns6, ns5, ns4, ns3, ns1);
+          if (gain > best) best = gain;
+        }
+        return best;
+      };
+
+      const canGuaranteeCatch = (cg, cp, cChance, s6, s5, s4, s3, s1) => {
+        if (cg >= TARGET) return true;
+        if (cp >= ctx.guar) return false;
+        return cg + maxGuaranteedGain(cp, cChance, s6, s5, s4, s3, s1) >= TARGET;
+      };
+
+      const memoKey = (cg, cp, cChance, s6, s5, s4, s3, s1, ce) => {
+        if (!ctx.useNumericKey) {
+          return `${cg}|${cp}|${cChance ? 1 : 0}|${encoded('s6', s6)}|${encoded('s5', s5)}|${s4}|${encoded('s3', s3)}|${encoded('s1', s1)}|${ce}`;
+        }
+        let k = cg;
+        k = k * ctx.radix.phase + cp;
+        k = k * 2 + (cChance ? 1 : 0);
+        k = k * ctx.radix.s6 + encoded('s6', s6);
+        k = k * ctx.radix.s5 + encoded('s5', s5);
+        k = k * ctx.radix.s4 + s4;
+        k = k * ctx.radix.s3 + encoded('s3', s3);
+        k = k * ctx.radix.s1 + encoded('s1', s1);
+        k = k * ctx.radix.enc + ce;
+        return k;
+      };
+
+      const nextEncounterEV = (gCarry, s6, s5, s3, s1, ce) => {
+        if (ce <= 1) return 0;
+        // 次の出会いではボーナスサブレが1枚に戻り、チャンスを10%で再抽選。
+        return 0.1 * dp(gCarry, 0, 1, s6, s5, 1, s3, s1, ce - 1)[0]
+             + 0.9 * dp(gCarry, 0, 0, s6, s5, 1, s3, s1, ce - 1)[0];
+      };
+
+      function dp(cg, cp, cChance, s6, s5, s4, s3, s1, ce) {
+        if (ce <= 0) return [0, -1, 0];
+
+        if (cg >= TARGET) {
+          return [1 + nextEncounterEV(0, s6, s5, s3, s1, ce), -1, 1];
+        }
+
+        const key = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+        const hit = ctx.memo.get(key);
+        if (hit !== undefined) return hit;
+
+        const passEV = nextEncounterEV(cg, s6, s5, s3, s1, ce);
+        const mustFinishNow = canGuaranteeCatch(cg, cp, cChance, s6, s5, s4, s3, s1);
+
+        // PDFでは、確定給餌回数だけで取り切れる状態に入ったら、その日のうちに
+        // 100%捕獲できるルートを優先する。したがって、この状態では翌日送りを候補から外す。
+        let bestEV = mustFinishNow ? -Infinity : passEV;
+        let bestAction = mustFinishNow ? -3 : -2; // -3 = 確定取り切り候補未選択
+        let bestCatchProb = 0;
+        const eatProb = cp >= ctx.guar ? 0.6 : 1.0;
+
+        for (let ai = 0; ai < actions.length; ai++) {
+          const a = actions[ai];
+          let count;
+          if (a.id === 's6') count = s6;
+          else if (a.id === 's5') count = s5;
+          else if (a.id === 's4') count = s4;
+          else if (a.id === 's3') count = s3;
+          else count = s1;
+          if (count === 0) continue;
+
+          let [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+
+          const np = Math.min(ctx.guar, cp + 1);
+
+          if (mustFinishNow) {
+            // 確定取り切り中は、最悪ケースでもこの一手の後に100%捕獲ルートが
+            // 残る行動だけを許可する。チャンス1投目は最低3倍、それ以外は最低1倍。
+            const minMultiplier = (cChance && cp === 0) ? 3 : 1;
+            const worstCaseG = Math.min(TARGET, cg + a.val * minMultiplier);
+            const preservesGuarantee = worstCaseG >= TARGET
+              || canGuaranteeCatch(worstCaseG, np, false, ns6, ns5, ns4, ns3, ns1);
+            if (!preservesGuarantee) continue;
+          }
+
+          const evAfterEat = (ng) => {
+            const clamped = Math.min(TARGET, ng);
+            if (clamped >= TARGET) {
+              return 1 + nextEncounterEV(0, ns6, ns5, ns3, ns1, ce);
+            }
+            return dp(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce)[0];
+          };
+
+          const pAfterEat = (ng) => {
+            const clamped = Math.min(TARGET, ng);
+            if (clamped >= TARGET) return 1;
+            return dp(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce)[2];
+          };
+
+          let eatEV;
+          let eatCatchProb;
+          if (cChance && cp === 0) {
+            eatEV = 0.10 * evAfterEat(TARGET)
+                  + 0.90 * evAfterEat(cg + a.val * 3);
+            eatCatchProb = 0.10
+                         + 0.90 * pAfterEat(cg + a.val * 3);
+          } else {
+            eatEV = 0.02 * evAfterEat(TARGET)
+                  + 0.08 * evAfterEat(cg + a.val * 3)
+                  + 0.90 * evAfterEat(cg + a.val);
+            eatCatchProb = 0.02
+                         + 0.08 * pAfterEat(cg + a.val * 3)
+                         + 0.90 * pAfterEat(cg + a.val);
+          }
+
+          // 食べなかった場合はサブレ非消費でその出会いだけ終了。
+          const expectedValue = eatProb * eatEV + (1 - eatProb) * passEV;
+          const currentCatchProb = eatProb * eatCatchProb;
+
+          if (expectedValue > bestEV + EPS) {
+            bestEV = expectedValue;
+            bestAction = ai;
+            bestCatchProb = currentCatchProb;
+          } else if (Math.abs(expectedValue - bestEV) <= EPS) {
+            // ストップと同値ならストップ維持。サブレ同士のみ元版と同じ補助順位で決定。
+            if (bestAction >= 0 && tieRank(a) < tieRank(actions[bestAction])) {
+              bestEV = expectedValue;
+              bestAction = ai;
+              bestCatchProb = currentCatchProb;
+            }
+          }
+        }
+
+        // mustFinishNow=true なら理論上必ず候補が1つ以上ある。万一入力の不整合等で
+        // 候補が見つからなかった場合だけ安全側で従来の翌日送りへフォールバックする。
+        if (bestAction === -3) {
+          bestEV = passEV;
+          bestAction = -2;
+          bestCatchProb = 0;
+        }
+
+        const out = [bestEV, bestAction, bestCatchProb];
+        ctx.memo.set(key, out);
+        return out;
+      }
+
+      const base = dp(
+        g, phase, chance ? 1 : 0,
+        startInv.s6, startInv.s5, startInv.s4, startInv.s3, startInv.s1, enc
+      );
+
+      // 既存UIの「大成功・満腹なし進行時」表示用ルートもWorker内で作り、
+      // 同じメモを使い回してメインスレッド側の再計算をゼロにする。
+      const route = [];
+      let rg = g;
+      let rp = phase;
+      let rChance = chance;
+      let rs6 = startInv.s6, rs5 = startInv.s5, rs4 = startInv.s4, rs3 = startInv.s3, rs1 = startInv.s1;
+
+      for (let guard = 0; rg < TARGET && guard < 40; guard++) {
+        const r = dp(rg, rp, rChance ? 1 : 0, rs6, rs5, rs4, rs3, rs1, enc);
+        if (r[1] < 0) break;
+        const a = actions[r[1]];
+        route.push(a.name);
+
+        if (a.id === 's6' && rs6 !== -1) rs6--;
+        else if (a.id === 's5' && rs5 !== -1) rs5--;
+        else if (a.id === 's4' && rs4 !== -1) rs4--;
+        else if (a.id === 's3' && rs3 !== -1) rs3--;
+        else if (a.id === 's1' && rs1 !== -1) rs1--;
+
+        rg += a.val * (rChance ? 3 : 1);
+        rp = Math.min(ctx.guar, rp + 1);
+        rChance = false;
+      }
+
+      let action = null;
+      if (base[1] >= 0) action = actions[base[1]];
+      else if (base[1] === -2) action = { id: 'pass', val: 0, name: '➔ 翌日へ (ストップ)' };
+
+      return {
+        ev: base[0],
+        catchProb: base[2],
+        action,
+        route,
+        finalG: rg,
+        memoStates: ctx.memo.size,
+        numericMemoKey: ctx.useNumericKey
+      };
+    }
+  </script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
 
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
       const isInf = value === '∞';
@@ -99,6 +474,8 @@
       const [isFull, setIsFull] = useLocalStorage('mewtwo_isFull', false);
       const [history, setHistory] = useLocalStorage('mewtwo_history', []);
       const [isPremium, setIsPremium] = useLocalStorage('mewtwo_isPremium', true);
+      const workerRef = useRef(null);
+      const requestRef = useRef(0);
 
       const [engineState, setEngineState] = useState({
         isCalculating: false,
@@ -126,122 +503,23 @@
         });
         setInventory(cleanedData);
         setFormData(cleanedData);
-        globalDpMemo.clear(); 
       };
 
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
       // =========================================================================
-      // 高速・安全な期待値計算エンジン (無限ループ・フリーズ防止ガード付き)
+      // PDF前提に忠実な期待値計算エンジン（Web Worker版）
+      // ※ 計算内容は前段のロジック修正版と同じ。UIスレッドから計算だけを分離する。
       // =========================================================================
-      const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
-        
-        const calcDP = (cg, cf, cChance, cInv, cEnc) => {
-          if (cEnc <= 0) return { ev: 0, catchProb: 0, action: null };
-          if (cg >= 30) {
-            let nextInvDay = { ...cInv, s4: 1 }; 
-            let evNext = 0;
-            if (cEnc > 1) {
-              evNext = 0.1 * calcDP(0, 0, true, nextInvDay, cEnc - 1).ev + 0.9 * calcDP(0, 0, false, nextInvDay, cEnc - 1).ev;
-            }
-            return { ev: 1.0 + evNext, catchProb: 1.0, action: null };
-          }
-          if (cf >= 10) { 
-            let nextInvDay = { ...cInv, s4: 1 };
-            let evNext = 0;
-            if (cEnc > 1) {
-              evNext = 0.1 * calcDP(cg, 0, true, nextInvDay, cEnc - 1).ev + 0.9 * calcDP(cg, 0, false, nextInvDay, cEnc - 1).ev;
-            }
-            return { ev: evNext, catchProb: 0, action: { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 } };
-          }
-
-          const cap = (val) => val === '∞' ? 'inf' : Math.min(val, cEnc + 2);
-          const memoKey = `${cg}-${cf}-${cChance}-${cap(cInv.s6)}-${cap(cInv.s5)}-${cInv.s4}-${cap(cInv.s3)}-${cap(cInv.s1)}-${cEnc}-${guar}-${premium}`;
-
-          if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
-          if (globalDpMemo.size > 20000) globalDpMemo.clear(); // 安全なメモリ制限
-
-          let nextInvDay = { ...cInv, s4: 1 };
-          let passEv = 0;
-          if (cEnc > 1) {
-            passEv = 0.1 * calcDP(cg, 0, true, nextInvDay, cEnc - 1).ev + 0.9 * calcDP(cg, 0, false, nextInvDay, cEnc - 1).ev;
-          }
-
-          let bestEv = passEv;
-          let bestAct = { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 };
-          let bestCatchProb = 0;
-
-          const sables = [
-            { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)', priority: 5 },
-            { id: 's1', val: 1, name: 'ポケ(1)', priority: 4 },
-            { id: 's3', val: 3, name: 'スーパー(3)', priority: 3 },
-            { id: 's5', val: 5, name: 'ハイパー(5)', priority: 2 },
-            { id: 's6', val: 6, name: 'ミュウツー(6)', priority: 1 }
-          ];
-
-          const eatProb = (cf >= guar) ? 0.6 : 1.0;
-          const rejectProb = 1.0 - eatProb;
-
-          for (const sable of sables) {
-            if (cInv[sable.id] !== '∞' && cInv[sable.id] <= 0) continue;
-
-            let nextInvEat = { ...cInv };
-            if (nextInvEat[sable.id] !== '∞') nextInvEat[sable.id]--;
-
-            const evalEatState = (newG) => {
-              if (newG >= 30) {
-                let nextInvSuccess = { ...nextInvEat, s4: 1 };
-                let evNext = 0;
-                if (cEnc > 1) {
-                  evNext = 0.1 * calcDP(0, 0, true, nextInvSuccess, cEnc - 1).ev + 0.9 * calcDP(0, 0, false, nextInvSuccess, cEnc - 1).ev;
-                }
-                return 1.0 + evNext;
-              }
-              return calcDP(newG, cf + 1, false, nextInvEat, cEnc).ev;
-            };
-
-            const evalEatProb = (newG) => {
-              if (newG >= 30) return 1.0;
-              return calcDP(newG, cf + 1, false, nextInvEat, cEnc).catchProb;
-            };
-
-            let evEat = 0, probEat = 0;
-            if (cChance && cf === 0) {
-              evEat = 0.1 * evalEatState(30) + 0.9 * evalEatState(cg + sable.val * 3);
-              probEat = 0.1 * 1.0 + 0.9 * evalEatProb(cg + sable.val * 3);
-            } else {
-              evEat = 0.02 * evalEatState(30) + 0.08 * evalEatState(cg + sable.val * 3) + 0.90 * evalEatState(cg + sable.val);
-              probEat = 0.02 * 1.0 + 0.08 * evalEatProb(cg + sable.val * 3) + 0.90 * evalEatProb(cg + sable.val);
-            }
-
-            let expectedValue = eatProb * evEat + rejectProb * passEv;
-            let currentCatchProb = eatProb * probEat;
-
-            if (expectedValue > bestEv + 1e-7) {
-              bestEv = expectedValue;
-              bestAct = sable;
-              bestCatchProb = currentCatchProb;
-            } else if (Math.abs(expectedValue - bestEv) <= 1e-7) {
-              let currentPriority = bestAct.id === 'pass' ? 6 : bestAct.priority;
-              if (sable.priority > currentPriority) {
-                bestEv = expectedValue;
-                bestAct = sable;
-                bestCatchProb = currentCatchProb;
-              }
-            }
-          }
-
-          const res = { ev: bestEv, catchProb: bestCatchProb, action: bestAct };
-          globalDpMemo.set(memoKey, res);
-          return res;
-        };
-
-        return calcDP(g, f, chance, inv, enc);
-      }, []);
-
       useEffect(() => {
         let isCancelled = false;
-        
+        const requestId = ++requestRef.current;
+
+        if (workerRef.current) {
+          workerRef.current.terminate();
+          workerRef.current = null;
+        }
+
         if (actualGauge >= 30 || inventory.encounters <= 0) {
           setEngineState({
             isCalculating: false,
@@ -254,48 +532,80 @@
 
         setEngineState(prev => ({ ...prev, isCalculating: true, bestMove: { type: '計算中...', id: null, prob: 0 } }));
 
-        // 同期処理として一瞬で計算（フリーズしない軽量設計）
-        try {
-          const res = getBestAction(actualGauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount, isPremium);
-          if (isCancelled) return;
+        const workerSource = document.getElementById('solver-worker').textContent;
+        const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
+        const worker = new Worker(workerUrl);
+        workerRef.current = worker;
 
-          const route = [];
-          let currG = actualGauge;
-          let currF = fedCount;
-          let currChance = isChance;
-          let currInv = { ...inventory };
-          
-          while (currG < 30 && currF < 10) {
-            const stepRes = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount, isPremium);
-            if (!stepRes || !stepRes.action || stepRes.action.id === 'pass') break;
-            
-            route.push(stepRes.action.name);
-            let val = stepRes.action.val;
-            let multiplier = currChance ? 3 : 1;
-            currG += val * multiplier;
-            currF++;
-            currChance = false;
-            if (currInv[stepRes.action.id] !== '∞') currInv[stepRes.action.id]--;
+        const cleanupWorker = () => {
+          worker.terminate();
+          URL.revokeObjectURL(workerUrl);
+          if (workerRef.current === worker) workerRef.current = null;
+        };
+
+        worker.onmessage = (event) => {
+          if (isCancelled || requestId !== requestRef.current) return;
+          const data = event.data || {};
+
+          if (data.type === 'error') {
+            console.error(data.message || 'Worker calculation error');
+            setEngineState({
+              isCalculating: false,
+              bestMove: { type: 'エラー', id: null, prob: 0 },
+              expectedTotal: "0.00",
+              routeData: { route: [], finalG: actualGauge }
+            });
+            cleanupWorker();
+            return;
           }
 
+          const res = data.result;
           setEngineState({
             isCalculating: false,
-            bestMove: res.action ? { type: res.action.name, id: res.action.id, prob: res.catchProb } : { type: '➔ 翌日へ (ストップ)', id: 'pass', prob: 0 },
-            expectedTotal: res.ev.toFixed(2), 
-            routeData: { route, finalG: currG }
+            bestMove: res.action
+              ? { type: res.action.name, id: res.action.id, prob: res.catchProb }
+              : { type: '➔ 翌日へ (ストップ)', id: 'pass', prob: 0 },
+            expectedTotal: res.ev.toFixed(2),
+            routeData: { route: res.route || [], finalG: res.finalG }
           });
-        } catch (e) {
-          console.error(e);
+          cleanupWorker();
+        };
+
+        worker.onerror = (event) => {
+          if (isCancelled || requestId !== requestRef.current) return;
+          console.error(event.message || event);
           setEngineState({
             isCalculating: false,
             bestMove: { type: 'エラー', id: null, prob: 0 },
             expectedTotal: "0.00",
             routeData: { route: [], finalG: actualGauge }
           });
-        }
+          cleanupWorker();
+        };
 
-        return () => { isCancelled = true; };
-      }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, isPremium, getBestAction]);
+        worker.postMessage({
+          type: 'solve',
+          requestId,
+          premium: isPremium,
+          guaranteedCount,
+          state: {
+            gauge: actualGauge,
+            fedCount,
+            chance: isChance,
+            encounters: Number(inventory.encounters) || 0,
+            inventory
+          }
+        });
+
+        return () => {
+          isCancelled = true;
+          if (workerRef.current === worker) {
+            worker.terminate();
+            workerRef.current = null;
+          }
+          URL.revokeObjectURL(workerUrl);
+        };
+      }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, isPremium]);
 
       const handleThrow = (multiplier) => {
         const actId = engineState.bestMove.id;
@@ -447,7 +757,7 @@
                       <button onClick={() => handleThrow(1)} disabled={engineState.isCalculating} className={`bg-white border border-purple-200 text-purple-700 py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-purple-100 active:scale-95'}`}>通常</button>
                       <button onClick={() => handleThrow(3)} disabled={engineState.isCalculating} className={`bg-purple-600 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-purple-700 active:scale-95'}`}>大成功 (3倍)</button>
                       <button onClick={() => handleThrow(30)} disabled={engineState.isCalculating} className={`bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:opacity-80 active:scale-95'}`}>超成功 (一発)</button>
-                      <button onClick={() => handleThrow(0)} disabled={engineState.isCalculating} className={`bg-gray-400 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-gray-500 active:scale-95'}`}>満腹 (逃走)</button>
+                      <button onClick={() => handleThrow(0)} disabled={engineState.isCalculating || fedCount < guaranteedCount} className={`bg-gray-400 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : fedCount < guaranteedCount ? 'opacity-50 cursor-not-allowed' : 'active:bg-gray-500 active:scale-95'}`}>満腹 (逃走)</button>
                     </div>
                   </>
                 )}
@@ -478,8 +788,8 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-bold text-gray-800">イベント完走予測</h2>
-                <p className="text-xs text-gray-400">適用中の在庫・回数による期待値</p>
+                <h2 className="text-sm font-bold text-gray-800">残り期待捕獲数</h2>
+                <p className="text-xs text-gray-400">現在の在庫・残り出会い回数による期待値</p>
               </div>
               <div className={`text-right transition-opacity ${engineState.isCalculating ? 'opacity-50' : 'opacity-100'}`}>
                 <span className="text-2xl font-black text-purple-700">{engineState.expectedTotal}</span>
@@ -492,7 +802,7 @@
                 <h2 className="text-sm font-bold text-gray-800">サブレ所持数・設定</h2>
                 <label className="flex items-center cursor-pointer">
                   <div className="relative">
-                    <input type="checkbox" className="sr-only" checked={isPremium} onChange={(e) => { setIsPremium(e.target.checked); globalDpMemo.clear(); }} disabled={engineState.isCalculating} />
+                    <input type="checkbox" className="sr-only" checked={isPremium} onChange={(e) => { setIsPremium(e.target.checked); }} disabled={engineState.isCalculating} />
                     <div className={`block w-10 h-6 rounded-full transition-colors ${isPremium ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
                     <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${isPremium ? 'transform translate-x-4' : ''}`}></div>
                   </div>
