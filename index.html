@@ -710,11 +710,14 @@
               } else {
                 // PDFは「同じ組み合わせなら基本は小さい数字から」としつつ、
                 // ボーナスサブレ等は節約したい在庫と数字順が一致しない例外としている。
-                // イベント全体期待値に加えて“この遭遇の捕獲確率”まで同値なら、
-                // その遭遇で使い切りたいボーナスサブレを先に消化する。
+                // ただし今回の例外は、プレミアム時の「ボーナス+(4) vs スーパー(3)」だけに限定する。
+                // イベント全体期待値に加えて“この遭遇の捕獲確率”まで同値なら、4を先に消化する。
                 const bestA = actions[bestAction];
-                const bonusVsOther = (a.id === 's4') !== (bestA.id === 's4');
-                if (bonusVsOther) {
+                const isPremiumBonusVsSuper = ctx.premium && (
+                  (a.id === 's4' && bestA.id === 's3') ||
+                  (a.id === 's3' && bestA.id === 's4')
+                );
+                if (isPremiumBonusVsSuper) {
                   const currentCatch = forcedActionCatchProb(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
                   const bestCatch = forcedActionCatchProb(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
                   if (Math.abs(currentCatch - bestCatch) <= 1e-12) {
