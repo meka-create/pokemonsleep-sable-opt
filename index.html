@@ -164,9 +164,6 @@
 
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
-      // =========================================================================
-      // ダイナミック・プライシング最適化エンジン (人工ペナルティ撤廃・確率最適化版)
-      // =========================================================================
       const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
         const CATCH_REWARD = 2000; 
 
@@ -179,7 +176,6 @@
 
           if (globalDpMemo.size > 50000) globalDpMemo.clear();
 
-          // --- PDFの「例外ルール」判定 ---
           const isHyper = cInv.s5 > 0 || (cInv.s3 !== '∞' && cInv.s3 > 0);
           const surplusThreshold = isHyper ? cEnc + 3 : cEnc * 2;
           
@@ -195,8 +191,6 @@
             priority6 = 10;
           }
 
-          // 手数コスト：満腹リスク下で「サブレを投げる」という行為自体にかかる精神的・時間的コスト
-          // 無限サブレであっても、60%のクジを引くこと自体を嫌うようにする
           const isRiskState = (cf >= guar);
           const RISK_COST = isRiskState ? 20 : 0; 
 
@@ -225,13 +219,10 @@
           let bestAct = null;
           let bestProb = 0;
 
-          // --- 翌日へ回すことの真の価値（パスEV） ---
           let passEv = 0;
           if (cEnc > 1) {
             const bonusNextDay = premium ? 4 : 3;
             const remainingGauge = Math.max(0, 30 - cg - bonusNextDay);
-            // 翌日になればボーナスサブレが無料でもらえ、確定枠内で安全に投げられる
-            // CATCH_REWARD から、残りを埋めるコストと、出会い回数を1回消費するペナルティ(200)を引く
             passEv = CATCH_REWARD - 200 - (remainingGauge * 10);
           }
 
@@ -330,7 +321,7 @@
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
       }, [actualGauge, fedCount, isChance, guaranteedCount, inventory, isPremium, getBestAction]);
 
-      // --- モンテカルロ・シミュレーション (完走予測だけは非同期で回す) ---
+      // --- モンテカルロ・シミュレーション (持ち越しバグ修正版) ---
       useEffect(() => {
         setSimExpectedCatches("計算中...");
         let isCancelled = false;
@@ -347,20 +338,33 @@
             let catches = 0;
             for (let i = 0; i < CHUNK_SIZE; i++) {
               let simInv = { ...inventory };
+              // ★修正箇所：進んだゲージを保持する変数を用意
+              let currentCarryGauge = actualGauge;
+
               for (let e = 0; e < simInv.encounters; e++) {
                 let sf = (e === 0) ? fedCount : 0;
                 let sChance = (e === 0) ? isChance : Math.random() < 0.1;
-                let simGauge = (e === 0) ? actualGauge : 0; 
+                // ★修正箇所：初日以外も、前日の持ち越しゲージを引き継ぐ
+                let simGauge = currentCarryGauge; 
                 let active = true;
 
-                if (e === 0 && simGauge >= 30) {
+                // ★修正箇所：日を跨ぐごとにボーナスサブレを復活させる
+                simInv.s4 = 1;
+
+                if (simGauge >= 30) {
                   catches++;
+                  currentCarryGauge = 0;
                   active = false;
                 }
 
                 while (active && simGauge < 30) {
                   const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, guaranteedCount, isPremium);
-                  if (!res || !res.action || res.action.id === 'pass') break;
+                  if (!res || !res.action || res.action.id === 'pass') {
+                    // ストップ（パス）した場合、そこまで進んだゲージを持ち越す
+                    currentCarryGauge = simGauge;
+                    active = false;
+                    break;
+                  }
                   const action = res.action;
 
                   let multiplier = 1;
@@ -373,6 +377,8 @@
                   }
 
                   if (sf >= 3 && Math.random() < 0.4) {
+                    // 満腹になって逃げられた場合も、そこまで進んだゲージを持ち越す
+                    currentCarryGauge = simGauge;
                     active = false; 
                     break;
                   }
@@ -384,9 +390,14 @@
 
                   if (simGauge >= 30) {
                     catches++;
-                    simGauge = 0; 
+                    currentCarryGauge = 0; // 捕まえたらリセット
                     active = false;
                   }
+                }
+                
+                // 万が一whileを抜けてactiveなままの場合のフェイルセーフ
+                if (active) {
+                  currentCarryGauge = simGauge;
                 }
               }
             }
@@ -411,7 +422,6 @@
         };
       }, [inventory, getBestAction, actualGauge, fedCount, isChance, guaranteedCount, isPremium]);
 
-      // --- アクションハンドラ ---
       const handleThrow = (multiplier) => {
         const actId = currentBestMove.id;
         if (!actId || actId === 'pass') return;
