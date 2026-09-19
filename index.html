@@ -9,16 +9,17 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
-    body { background-color: #f3f4f6; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
-    /* スクロールバー非表示 */
+    body { background-color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, sans-serif; -webkit-tap-highlight-color: transparent; }
     ::-webkit-scrollbar { display: none; }
+    .fade-in { animation: fadeIn 0.3s ease-in-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useCallback } = React;
 
     function useLocalStorage(key, initialValue) {
       const [storedValue, setStoredValue] = useState(() => {
@@ -44,30 +45,46 @@
     const App = () => {
       // --- State ---
       const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
-        s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞'
+        s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
       });
+      const [formData, setFormData] = useState(inventory);
+      
       const [gauge, setGauge] = useState(0);
       const [isChance, setIsChance] = useState(false);
       const [fedCount, setFedCount] = useState(0);
       const [guaranteedCount, setGuaranteedCount] = useState(3);
+      const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
 
-      // --- インベントリ更新ハンドラ ---
-      const handleInvChange = (id, value) => {
+      // 入力ハンドラ
+      const handleFormChange = (id, value) => {
         let parsed = value;
         if (value !== '∞') {
           parsed = parseInt(String(value).replace(/[^0-9]/g, ''), 10);
           if (isNaN(parsed) || parsed < 0) parsed = 0;
         }
-        setInventory(prev => ({ ...prev, [id]: parsed }));
+        setFormData(prev => ({ ...prev, [id]: parsed }));
       };
 
-      // --- 動的計画法（DP）による真の期待値計算エンジン ---
-      const bestMove = useMemo(() => {
-        const remaining = 30 - gauge;
-        if (remaining <= 0) return { type: '完了', message: '捕獲完了です！お疲れ様でした。' };
+      // 適用ボタン
+      const applySettings = () => {
+        setInventory(formData);
+      };
 
-        // サブレの相対的価値（節約優先度）
-        const costs = { s6: 200, s5: 80, s4: 0, s3: 40, s1: 10 };
+      const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
+
+      // --- 動的計画法（DP）コアエンジン ---
+      const getBestAction = useCallback((g, f, chance, inv, enc, guar) => {
+        if (g >= 30) return { ev: 10000, catchProb: 1.0, action: null };
+        if (f >= 6) return { ev: g * 20, catchProb: 0.0, action: null };
+
+        const isLastDay = enc <= 1;
+        const isS6Surplus = inv.s6 !== '∞' && inv.s6 >= enc + 3;
+        
+        let cost6 = 200; 
+        if (isLastDay) cost6 = 10; 
+        else if (isS6Surplus) cost6 = 70; 
+
+        const costs = { s6: cost6, s5: 80, s4: 0, s3: 40, s1: 10 };
         const sables = [
           { id: 's6', val: 6, name: 'ミュウツー(6)' },
           { id: 's5', val: 5, name: 'ハイパー(5)' },
@@ -77,98 +94,165 @@
         ];
 
         const CATCH_REWARD = 10000;
-        const GAUGE_VALUE = 20; // 捕獲できなくてもゲージを進める価値
+        const GAUGE_VALUE = 20;
         const memo = {};
 
-        // 状態(g: 現在ゲージ, f: 食べた枚数, chance: チャンス状態, inv: 残りサブレ)の期待値を計算
-        const calcDP = (g, f, chance, inv) => {
-          if (g >= 30) return { ev: CATCH_REWARD, action: null };
-          if (f >= 6) return { ev: g * GAUGE_VALUE, action: null }; // 深さ制限(現実的に6枚目以降はほぼ満腹)
+        const calcDP = (cg, cf, cChance, cInv) => {
+          if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
+          if (cf >= 6) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
 
-          const memoKey = `${g}-${f}-${chance}-${inv.s6}-${inv.s5}-${inv.s4}-${inv.s3}-${inv.s1}`;
+          const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}`;
           if (memo[memoKey]) return memo[memoKey];
 
           let bestVal = -Infinity;
-          let bestAction = null;
+          let bestAct = null;
+          let bestProb = 0;
 
-          // 満腹リスクの計算（このターン投げた「後」に満腹になる確率）
-          const fullRiskRate = (f + 1 >= guaranteedCount) ? 0.4 : 0.0;
+          const fullRiskRate = (cf + 1 >= guar) ? 0.4 : 0.0;
           const eatNextRate = 1.0 - fullRiskRate;
 
           for (const sable of sables) {
-            const count = inv[sable.id];
+            const count = cInv[sable.id];
             if (count !== '∞' && count <= 0) continue;
 
-            const nextInv = { ...inv };
+            const nextInv = { ...cInv };
             if (nextInv[sable.id] !== '∞') nextInv[sable.id] -= 1;
             
             const cost = costs[sable.id];
             let expectedValue = 0;
+            let expectedCatchProb = 0;
 
-            // 結果を評価するヘルパー（投げた後の状態をシミュレーション）
-            const evaluateOutcome = (nextG) => {
-              if (nextG >= 30) return CATCH_REWARD; // 捕獲
-              // 次のターンへ進む。満腹になる確率(0.4)と、食べ続けて次も投げられる確率(0.6)の期待値を合成
-              const nextStateEv = calcDP(nextG, f + 1, false, nextInv).ev;
-              return (eatNextRate * nextStateEv) + (fullRiskRate * (nextG * GAUGE_VALUE));
+            const evaluateOutcomeEv = (nextG) => {
+              if (nextG >= 30) return CATCH_REWARD;
+              const nextState = calcDP(nextG, cf + 1, false, nextInv);
+              return (eatNextRate * nextState.ev) + (fullRiskRate * (nextG * GAUGE_VALUE));
+            };
+            const evaluateOutcomeProb = (nextG) => {
+              if (nextG >= 30) return 1.0;
+              const nextState = calcDP(nextG, cf + 1, false, nextInv);
+              return eatNextRate * nextState.catchProb;
             };
 
-            if (chance) {
-              // チャンス: 90%で大成功(3倍), 10%で超成功(MAX)
-              const valBig = Math.min(30, g + sable.val * 3);
-              const evBig = evaluateOutcome(valBig);
-              const evMega = CATCH_REWARD;
-              expectedValue = (0.9 * evBig) + (0.1 * evMega) - cost;
+            if (cChance) {
+              const valBig = Math.min(30, cg + sable.val * 3);
+              expectedValue = (0.9 * evaluateOutcomeEv(valBig)) + (0.1 * CATCH_REWARD) - cost;
+              expectedCatchProb = (0.9 * evaluateOutcomeProb(valBig)) + (0.1 * 1.0);
             } else {
-              // 通常: 90%等倍, 8%大成功(3倍), 2%超成功(MAX)
-              const valNorm = Math.min(30, g + sable.val);
-              const valBig = Math.min(30, g + sable.val * 3);
-              const evNorm = evaluateOutcome(valNorm);
-              const evBig = evaluateOutcome(valBig);
-              const evMega = CATCH_REWARD;
-              expectedValue = (0.9 * evNorm) + (0.08 * evBig) + (0.02 * evMega) - cost;
+              const valNorm = Math.min(30, cg + sable.val);
+              const valBig = Math.min(30, cg + sable.val * 3);
+              expectedValue = (0.9 * evaluateOutcomeEv(valNorm)) + (0.08 * evaluateOutcomeEv(valBig)) + (0.02 * CATCH_REWARD) - cost;
+              expectedCatchProb = (0.9 * evaluateOutcomeProb(valNorm)) + (0.08 * evaluateOutcomeProb(valBig)) + (0.02 * 1.0);
             }
 
             if (expectedValue > bestVal) {
               bestVal = expectedValue;
-              bestAction = sable.name;
+              bestAct = sable;
+              bestProb = expectedCatchProb;
             }
           }
-
-          const result = { ev: bestVal, action: bestAction };
-          memo[memoKey] = result;
-          return result;
+          const res = { ev: bestVal, catchProb: bestProb, action: bestAct };
+          memo[memoKey] = res;
+          return res;
         };
 
-        const result = calcDP(gauge, fedCount, isChance, inventory);
-        
-        // 例外処理: サブレが一切ない場合
-        if (!result.action) return { type: '在庫なし', message: '投げられるサブレがありません。' };
-        return { type: result.action, message: `${result.action} を投げましょう。` };
-      }, [gauge, fedCount, isChance, guaranteedCount, inventory]);
+        return calcDP(g, f, chance, inv);
+      }, []);
 
-      // --- アクション ---
+      // 想定ルート（すべて通常成功で進行し、満腹にならなかった場合の手順）の生成
+      const expectedRouteData = useMemo(() => {
+        const route = [];
+        let currG = gauge;
+        let currF = fedCount;
+        let currChance = isChance;
+        let currInv = { ...inventory };
+        
+        while (currG < 30 && currF < 6) {
+          const res = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount);
+          if (!res || !res.action) break;
+          
+          route.push(res.action.name);
+          currG += res.action.val;
+          currF++;
+          currChance = false;
+          if (currInv[res.action.id] !== '∞') currInv[res.action.id]--;
+        }
+        return { route, finalG: currG };
+      }, [gauge, fedCount, isChance, inventory, guaranteedCount, getBestAction]);
+
+      // 現在の実践用シミュレーターにおける最適な一手
+      const currentBestMove = useMemo(() => {
+        if (30 - gauge <= 0) return { type: '完了', id: null, prob: 1.0 };
+        const res = getBestAction(gauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount);
+        if (!res || !res.action) return { type: '在庫なし', id: null, prob: 0.0 };
+        return { type: res.action.name, id: res.action.id, prob: res.catchProb };
+      }, [gauge, fedCount, isChance, guaranteedCount, inventory, getBestAction]);
+
+      // --- モンテカルロ・シミュレーション (イベント完走予測) ---
+      useEffect(() => {
+        let totalCatches = 0;
+        const TRIALS = 500; 
+        
+        for (let i = 0; i < TRIALS; i++) {
+          let simInv = { ...inventory };
+          let simGauge = 0; 
+          let catches = 0;
+
+          for (let e = 0; e < simInv.encounters; e++) {
+            let sf = 0;
+            let sChance = Math.random() < 0.1;
+            let active = true;
+
+            while (active && simGauge < 30) {
+              const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, 3);
+              if (!res || !res.action) break;
+              const action = res.action;
+
+              if (simInv[action.id] !== '∞') simInv[action.id]--;
+
+              let multiplier = 1;
+              if (sChance && sf === 0) {
+                multiplier = Math.random() < 0.1 ? 30 : 3;
+              } else {
+                const r = Math.random();
+                if (r < 0.02) multiplier = 30;
+                else if (r < 0.10) multiplier = 3;
+              }
+
+              simGauge = Math.min(30, simGauge + action.val * multiplier);
+              sf++;
+              sChance = false;
+
+              if (simGauge >= 30) {
+                catches++;
+                simGauge = 0; 
+                active = false;
+              } else {
+                if (sf >= 3 && Math.random() < 0.4) active = false; 
+              }
+            }
+          }
+          totalCatches += catches;
+        }
+        setSimExpectedCatches((totalCatches / TRIALS).toFixed(2));
+      }, [inventory, getBestAction]);
+
+      // --- アクションハンドラ ---
       const handleThrow = (multiplier) => {
         if (multiplier === 0) {
-          alert("満腹になりました。今日の判定は終了です。");
+          alert("満腹になりました。今日の判定は終了です。リセットを押して次回に備えてください。");
           return;
         }
-        let added = 0;
-        if (bestMove.type.includes('6')) added = 6 * multiplier;
-        else if (bestMove.type.includes('5')) added = 5 * multiplier;
-        else if (bestMove.type.includes('4')) added = 4 * multiplier;
-        else if (bestMove.type.includes('3')) added = 3 * multiplier;
-        else if (bestMove.type.includes('1')) added = 1 * multiplier;
-        if (multiplier === 30) added = 30;
-
-        // インベントリの消費
-        const usedId = bestMove.type.includes('6') ? 's6' : 
-                       bestMove.type.includes('5') ? 's5' : 
-                       bestMove.type.includes('4') ? 's4' : 
-                       bestMove.type.includes('3') ? 's3' : 's1';
         
-        if (inventory[usedId] !== '∞') {
-          setInventory(prev => ({ ...prev, [usedId]: Math.max(0, prev[usedId] - 1) }));
+        const actId = currentBestMove.id;
+        if (!actId) return;
+
+        let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? 4 : actId === 's3' ? 3 : 1;
+        let added = multiplier === 30 ? 30 : val * multiplier;
+
+        if (inventory[actId] !== '∞') {
+          const nextCount = Math.max(0, inventory[actId] - 1);
+          setInventory(prev => ({ ...prev, [actId]: nextCount }));
+          setFormData(prev => ({ ...prev, [actId]: nextCount }));
         }
 
         setGauge(Math.min(30, gauge + added));
@@ -177,28 +261,29 @@
       };
 
       const resetEncounter = () => {
-        setGauge(0);
         setFedCount(0);
         setIsChance(false);
+        if (inventory.encounters > 0) {
+          const nextEnc = inventory.encounters - 1;
+          setInventory(prev => ({ ...prev, encounters: nextEnc }));
+          setFormData(prev => ({ ...prev, encounters: nextEnc }));
+        }
       };
 
-      // --- UI描画 ---
+      // --- UI Components ---
       const InputRow = ({ id, label, isS6 }) => (
         <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2">
             <input 
               type="text" 
-              inputMode={inventory[id] === '∞' ? 'text' : 'numeric'}
-              value={inventory[id]} 
-              onChange={(e) => handleInvChange(id, e.target.value)} 
-              className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none transition-all"
+              inputMode={formData[id] === '∞' ? 'text' : 'numeric'}
+              value={formData[id]} 
+              onChange={(e) => handleFormChange(id, e.target.value)} 
+              className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none"
             />
             {!isS6 && (
-              <button 
-                onClick={() => handleInvChange(id, '∞')} 
-                className="px-3 bg-purple-100 text-purple-700 rounded text-sm font-bold active:bg-purple-200 transition-colors"
-              >
+              <button onClick={() => handleFormChange(id, '∞')} className="px-3 bg-purple-100 text-purple-700 rounded text-sm font-bold active:bg-purple-200">
                 ∞
               </button>
             )}
@@ -207,28 +292,18 @@
       );
 
       return (
-        <div className="min-h-screen max-w-md mx-auto bg-gray-200 flex flex-col">
-          <header className="bg-white px-4 pt-8 pb-3 shadow-sm sticky top-0 z-10 flex justify-between items-end">
+        <div className="min-h-screen max-w-md mx-auto bg-gray-200 flex flex-col pb-10">
+          <header className="bg-white px-4 pt-8 pb-3 shadow-sm sticky top-0 z-10">
             <h1 className="text-lg font-black text-purple-900 tracking-tight flex items-center gap-2">
               <span className="bg-purple-600 text-white px-2 py-1 rounded text-xs">Opt</span>ミュウツーサブレ
             </h1>
           </header>
 
-          <main className="flex-1 overflow-y-auto p-4 space-y-4 pb-10">
-            {/* インベントリ領域 */}
-            <div className="bg-white rounded-2xl shadow-sm p-4">
-              <h2 className="text-sm font-bold text-gray-500 mb-3">サブレ所持数 (自動保存＆即時反映)</h2>
-              <div className="space-y-2">
-                <InputRow id="s6" label="ミュウツー (6)" isS6={true} />
-                <InputRow id="s5" label="ハイパー (5)" isS6={false} />
-                <InputRow id="s4" label="ボーナス+ (4)" isS6={false} />
-                <InputRow id="s3" label="スーパー (3)" isS6={false} />
-                <InputRow id="s1" label="ポケ (1)" isS6={false} />
-              </div>
-            </div>
-
-            {/* シミュレーション領域 */}
+          <main className="flex-1 overflow-y-auto p-4 space-y-4">
+            
+            {/* 1. シミュレーター領域 (上部) */}
             <div className="bg-white rounded-2xl shadow-sm p-5 border-t-4 border-purple-600">
+              <h2 className="text-sm font-bold text-gray-500 mb-4">実践シミュレーター</h2>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-gray-600 font-bold">フレンドポイント</span>
                 <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
@@ -253,14 +328,39 @@
               </div>
               <p className="text-xs text-gray-400 text-right mb-4">現在 {fedCount} 枚目（{fedCount >= guaranteedCount ? '⚠️満腹リスクあり' : '✅確定ライン'}）</p>
 
-              {/* 結果表示・操作パネル */}
               <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100">
-                <p className="text-xs text-gray-500 font-bold mb-1">計算された最適解</p>
-                <p className="text-3xl font-black text-purple-900 mb-5">{bestMove.type}</p>
+                <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
+                <p className="text-3xl font-black text-purple-900 mb-3">{currentBestMove.type}</p>
                 
-                {bestMove.type !== '完了' && bestMove.type !== '在庫なし' && (
+                {/* 確率と想定ルートの表示パネル */}
+                {currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
+                  <div className="mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full fade-in">
+                    <div className="flex justify-between border-b border-gray-100 pb-2 mb-2">
+                      <span className="font-bold text-gray-600">この回の捕獲確率:</span>
+                      <span className="font-black text-purple-700">{(currentBestMove.prob * 100).toFixed(1)}%</span>
+                    </div>
+                    <div>
+                      <span className="font-bold text-gray-600 block mb-2 text-xs">想定ルート (大成功・満腹なし進行時):</span>
+                      <div className="text-xs text-gray-600 flex flex-wrap gap-1 items-center">
+                        {expectedRouteData.route.map((step, idx) => (
+                          <React.Fragment key={idx}>
+                            <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded font-medium">{step}</span>
+                            {idx < expectedRouteData.route.length - 1 && <span className="text-gray-400">➔</span>}
+                          </React.Fragment>
+                        ))}
+                        {expectedRouteData.finalG >= 30 ? (
+                          <span className="text-green-600 font-bold ml-1">GET!</span>
+                        ) : (
+                          <span className="text-gray-500 font-bold ml-1 text-xs">➔ 翌日へ</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
                   <>
-                    <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数も自動で減ります）</p>
+                    <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数は自動で減ります）</p>
                     <div className="grid grid-cols-2 gap-2 mb-2">
                       <button onClick={() => handleThrow(1)} className="bg-white border border-purple-200 text-purple-700 py-3 rounded-xl font-bold active:bg-purple-100 shadow-sm transition-transform active:scale-95">通常</button>
                       <button onClick={() => handleThrow(3)} className="bg-purple-600 text-white py-3 rounded-xl font-bold active:bg-purple-700 shadow-sm transition-transform active:scale-95">大成功 (3倍)</button>
@@ -270,7 +370,54 @@
                   </>
                 )}
               </div>
-              <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 transition-colors">次の出会いへリセット</button>
+              <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 transition-colors">次の出会いへ進む (残り回数-1)</button>
+            </div>
+
+            {/* 2. イベント完走予測 (中段) */}
+            <div className="bg-white rounded-2xl shadow-sm p-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-gray-800">イベント完走予測</h2>
+                <p className="text-xs text-gray-400">適用中の在庫・回数による期待値</p>
+              </div>
+              <div className="text-right">
+                <span className="text-2xl font-black text-purple-700">{simExpectedCatches}</span>
+                <span className="text-sm text-gray-500 ml-1">体</span>
+              </div>
+            </div>
+
+            {/* 3. 所持数設定 (下部) */}
+            <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
+              <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
+              <div className="space-y-3">
+                <InputRow id="s6" label="ミュウツー (6)" isS6={true} />
+                <InputRow id="s5" label="ハイパー (5)" isS6={false} />
+                
+                <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
+                  <span className="text-sm font-medium text-gray-700">ボーナス+ (4)</span>
+                  <select value={formData.s4} onChange={(e) => handleFormChange('s4', Number(e.target.value))} className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white">
+                    <option value={1}>1</option>
+                    <option value={0}>0</option>
+                  </select>
+                </div>
+
+                <InputRow id="s3" label="スーパー (3)" isS6={false} />
+                <InputRow id="s1" label="ポケ (1)" isS6={false} />
+                
+                <div className="flex justify-between items-center pt-2">
+                  <span className="text-sm font-bold text-gray-700">残り出会い回数</span>
+                  <input type="number" value={formData.encounters} onChange={(e) => handleFormChange('encounters', e.target.value)} className="w-16 p-1 border-2 border-purple-300 rounded text-center bg-purple-50 font-bold focus:outline-none" min="0" />
+                </div>
+              </div>
+
+              {/* 変更があった時のみ表示される適用ボタン */}
+              {isModified && (
+                <div className="mt-5 fade-in">
+                  <button onClick={applySettings} className="w-full bg-purple-600 text-white py-3 rounded-xl font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-transform text-lg">
+                    設定を適用して再計算
+                  </button>
+                  <p className="text-center text-xs text-red-500 mt-2 font-bold">※適用ボタンを押すまで上の計算には反映されません</p>
+                </div>
+              )}
             </div>
           </main>
         </div>
