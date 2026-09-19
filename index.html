@@ -331,7 +331,6 @@
       // PDF準拠ポリシーは「最初の3枚を必ず食べる」というPDF本文の前提にだけ適用する。
       // UIの「2枚」はカスタム条件として計算できるが、PDF固有の行動ルールは強制しない。
       const pdfStandardMode = ctx.guar === 3;
-      const guaranteePlanMemo = new Map();
 
       // PDF準拠の「確定取り切り」判定。
       // 残っている確定給餌回数の中で、最悪ケース（通常成功）でもゲージ30へ
@@ -386,152 +385,53 @@
         return cg + maxGuaranteedGain(cp, cChance, s6, s5, s4, s3, s1) >= TARGET;
       };
 
-      // 「確定で取り切れる」場合は、最悪ケースで100%捕獲を維持しつつ、
-      // 大成功・超成功で後続の高価なサブレを省ける確率まで評価する。
-      // expected は、そのルートを毎投後に引き直した場合の期待消費枚数。
-      const emptyUse = () => ({ s6: 0, s5: 0, s4: 0, s3: 0, s1: 0 });
-      const addUse = (base, other, weight = 1) => {
-        const out = { ...base };
-        for (const id of ['s6','s5','s4','s3','s1']) out[id] += (other?.[id] || 0) * weight;
-        return out;
-      };
-
-      const planResourceScore = (plan) => [
-        plan.expected.s6,
-        plan.expected.s5,
-        plan.expected.s3,
-        plan.expected.s4 * 2 + plan.expected.s1,
-        plan.counts.s6,
-        plan.counts.s5,
-        plan.counts.s3,
-        plan.counts.s4 * 2 + plan.counts.s1
-      ];
-
-      const compareSeq = (seqA, seqB) => {
-        const n = Math.min(seqA.length, seqB.length);
-        for (let i = 0; i < n; i++) {
-          const a = actions[seqA[i]];
-          const b = actions[seqB[i]];
-          if (a.val !== b.val) return a.val - b.val; // PDFの「小さい数字から」
-          const ar = tieRank(a), br = tieRank(b);
-          if (ar !== br) return ar - br;
-        }
-        return seqA.length - seqB.length;
-      };
-
-      const compareGuaranteedPlans = (a, b) => {
-        if (!b) return -1;
-        const as = planResourceScore(a);
-        const bs = planResourceScore(b);
-        for (let i = 0; i < as.length; i++) {
-          if (Math.abs(as[i] - bs[i]) > EPS) return as[i] - bs[i];
-        }
-        return compareSeq(a.seq, b.seq);
-      };
-
-      const addPlanAction = (ai, normalChild, bigChild, chanceFirst) => {
-        const a = actions[ai];
-        const counts = normalChild ? { ...normalChild.counts } : emptyUse();
-        counts[a.id]++;
-
-        let expected = emptyUse();
-        expected[a.id] = 1;
-        if (chanceFirst) {
-          // チャンス1投目: 10%超成功、90%が3倍。3倍後に未捕獲なら再計画。
-          expected = addUse(expected, bigChild?.expected, 0.90);
-        } else {
-          // 通常: 2%超成功、8%大成功、90%通常。各結果ごとに表を引き直す。
-          expected = addUse(expected, normalChild?.expected, 0.90);
-          expected = addUse(expected, bigChild?.expected, 0.08);
-        }
-        return {
-          counts,
-          expected,
-          seq: [ai, ...(normalChild ? normalChild.seq : [])]
-        };
-      };
-
-      const bestGuaranteedPlan = (cg, cp, cChance, s6, s5, s4, s3, s1) => {
-        if (!pdfStandardMode || cg >= TARGET || cp >= ctx.guar) return null;
-        if (!canGuaranteeCatch(cg, cp, cChance, s6, s5, s4, s3, s1)) return null;
-
-        const key = `${cg}|${cp}|${cChance ? 1 : 0}|${s6}|${s5}|${s4}|${s3}|${s1}`;
-        if (guaranteePlanMemo.has(key)) return guaranteePlanMemo.get(key);
-
-        const throwsLeft = ctx.guar - cp;
-        let best = null;
-
-        for (let ai = 0; ai < actions.length; ai++) {
-          const a = actions[ai];
-          const count = getCount(a.id, s6, s5, s4, s3, s1);
-          if (count === 0) continue;
-
-          const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
-          const chanceFirst = !!(cChance && cp === 0);
-          const minMultiplier = chanceFirst ? 3 : 1;
-          const ngNormal = Math.min(TARGET, cg + a.val * minMultiplier);
-          const np = Math.min(ctx.guar, cp + 1);
-
-          let normalChild = null;
-          if (ngNormal < TARGET) {
-            normalChild = bestGuaranteedPlan(ngNormal, np, false, ns6, ns5, ns4, ns3, ns1);
-            if (!normalChild) continue; // 最悪ケースで100%を維持できない初手は除外
-          }
-
-          let bigChild = null;
-          if (chanceFirst) {
-            // チャンス時は非超成功結果が常に3倍なので normalChild と同じ状態。
-            bigChild = normalChild;
-          } else {
-            const ngBig = Math.min(TARGET, cg + a.val * 3);
-            if (ngBig < TARGET) {
-              bigChild = bestGuaranteedPlan(ngBig, np, false, ns6, ns5, ns4, ns3, ns1);
-              if (!bigChild) continue;
-            }
-          }
-
-          const candidate = addPlanAction(ai, normalChild, bigChild, chanceFirst);
-
-          if (throwsLeft === 1) {
-            // PDF例外3: 最後の確定1投で届く場合は「届く最小の1枚」を使う。
-            if (!best) {
-              best = candidate;
-            } else {
-              const ba = actions[best.seq[0]];
-              if (a.val < ba.val || (a.val === ba.val && tieRank(a) < tieRank(ba))) best = candidate;
-            }
-          } else if (compareGuaranteedPlans(candidate, best) < 0) {
-            best = candidate;
-          }
-        }
-
-        guaranteePlanMemo.set(key, best);
-        return best;
-      };
-
       const countAvailable = (v) => v === -1 || v > 0;
       const actionIndex = (id) => actions.findIndex(a => a.id === id);
 
+      // X記事の3タイプは固定ではなく、手持ちに応じて行き来する。
+      // 判定を一箇所に集約し、初手表・16〜18の温存比較・6余り目安で
+      // 同じ分類を使う。ハイパーが残っている間はハイパー型、
+      // ハイパーがなくスーパーを残り遭遇ごとに1枚以上回せるならスーパー型、
+      // それ未満の有限在庫ならポケ中心寄りとする。
+      const strategyType = (ce, s5, s3) => {
+        if (countAvailable(s5)) return 'hyper';
+        if (s3 === -1) return 'super';
+        return Math.max(0, s3) >= Math.max(1, ce) ? 'super' : 'poke';
+      };
+
+      // 「今この1投を投げても、最悪ケースで保証内100%捕獲を維持できるか」。
+      // 確定取り切り中は候補をこの条件だけに絞り、その中では残りイベント全体の
+      // 期待捕獲数をDPで比較する。PDF/X記事の表や小さい順は同期待値時のタイブレーク。
+      const actionPreservesGuaranteedFinish = (ai, cg, cp, cChance, s6, s5, s4, s3, s1) => {
+        const a = actions[ai];
+        const count = getCount(a.id, s6, s5, s4, s3, s1);
+        if (count === 0) return false;
+        const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+        const minMultiplier = (cChance && cp === 0) ? 3 : 1;
+        const ng = Math.min(TARGET, cg + a.val * minMultiplier);
+        if (ng >= TARGET) return true;
+        const np = Math.min(ctx.guar, cp + 1);
+        return canGuaranteeCatch(ng, np, false, ns6, ns5, ns4, ns3, ns1);
+      };
+
       // PDFの表は「その日まだ1枚も投げていない・チャンスなし・ボーナス未使用」の表。
       // その条件に一致する代表3タイプでは表の初手を優先し、途中結果は上の確率的再計画に戻す。
-      const pdfStartPreferredAction = (cg, cp, cChance, s6, s5, s4, s3, s1) => {
+      const pdfStartPreferredAction = (cg, cp, cChance, s6, s5, s4, s3, s1, ce) => {
         if (!pdfStandardMode || cp !== 0 || cChance || s4 <= 0) return -1;
         const rem = TARGET - cg;
         if (rem <= 0 || rem > 18) return -1;
 
         let id = null;
-        const hyper = countAvailable(s5);
-        const superType = !hyper && ctx.premium && countAvailable(s3);
-        const pokeType = !hyper && !superType && !ctx.premium;
+        const type = strategyType(ce, s5, s3);
 
-        if (hyper) {
+        if (type === 'hyper') {
           if (rem === 18) id = 's6';
           else if (rem === 17) id = 's5';
           else if (rem === 16 || rem === 15) id = 's5';
           else if (rem >= 13 && rem <= 14) id = 's4';
           else if (rem >= 11 && rem <= 12) id = 's3';
           else if (rem >= 9 && rem <= 10) id = 's3';
-        } else if (superType) {
+        } else if (type === 'super') {
           if (rem >= 17 && rem <= 18) id = 's6';
           else if (rem >= 14 && rem <= 16) id = 's4';
           else if (rem >= 12 && rem <= 13) id = 's3';
@@ -539,7 +439,7 @@
           else if (rem >= 9 && rem <= 10) id = 's3';
           else if (rem >= 7 && rem <= 8) id = 's3';
           else if (rem === 6) id = 's1';
-        } else if (pokeType) {
+        } else if (type === 'poke') {
           if (rem >= 16 && rem <= 18) id = 's6';
           else if (rem >= 13 && rem <= 15) id = 's4';
           else if (rem >= 9 && rem <= 12) id = 's1';
@@ -561,15 +461,13 @@
         return -1;
       };
 
-      // PDF「6が余りそう」の目安。表がある1〜7回はその値を使い、それ以降は本文の概算式。
+      // X記事の「6が余りそう」は厳密な境界ではなく目安。
+      // 分類は strategyType() と統一し、本文のざっくり式だけを使う。
+      // 閾値到達時も6を強制せず、残り19以上での「6禁止」を解除してDP比較に戻すだけ。
       const s6SurplusThreshold = (ce, s5, s3) => {
-        const hasHyperOrSuper = countAvailable(s5) || countAvailable(s3);
-        if (hasHyperOrSuper) {
-          const table = { 1:3, 2:5, 3:6, 4:7, 5:7, 6:9, 7:10 };
-          return table[ce] ?? (ce + 3);
-        }
-        const table = { 1:3, 2:4, 3:6, 4:8, 5:10, 6:12, 7:14 };
-        return table[ce] ?? Math.max(3, ce * 2);
+        const type = strategyType(ce, s5, s3);
+        if (type === 'poke') return Math.max(3, ce * 2);
+        return Math.max(3, ce + 3);
       };
 
       const isS6Surplus = (ce, s6, s5, s3) => {
@@ -612,18 +510,13 @@
         if (hit !== undefined) return hit;
 
         const passEV = nextEncounterEV(cg, s6, s5, s3, s1, ce);
-        const guaranteedPlan = pdfStandardMode
-          ? bestGuaranteedPlan(cg, cp, cChance, s6, s5, s4, s3, s1)
-          : null;
+        const guaranteedFinish = pdfStandardMode
+          && canGuaranteeCatch(cg, cp, cChance, s6, s5, s4, s3, s1);
 
         const remainingGauge = TARGET - cg;
         const normalNonChance = !cChance;
-        // X記事では3タイプは固定分類ではなく、手持ちに応じて行き来する。
-        // ハイパーが無く、スーパーが残り遭遇数より少ない有限在庫なら、
-        // 「ポケ中心寄り」とみなし、16〜18でも6温存との比較を許す。
-        // スーパー無限、または各残り遭遇に1枚以上回せる在庫ならスーパー中心扱いを維持する。
-        const finiteSuper = s3 !== -1 ? Math.max(0, s3) : Infinity;
-        const isPokeCentered = !countAvailable(s5) && finiteSuper < ce;
+        const type = strategyType(ce, s5, s3);
+        const isPokeCentered = type === 'poke';
 
         // 最新版X.pdfの「保証が残り1枚」の意味に限定する。
         // 以前のように「保証が残り1枚なら当日捕獲率を最大化」するのではなく、
@@ -643,14 +536,14 @@
         // DPに「今取る」対「温存する」を比較させる。最終遭遇と、最後の確定1投で
         // そのまま捕獲できる場合は従来どおり取り切りを優先する。
         const allowPokeEarlyPreserveComparison = pdfStandardMode
-          && !!guaranteedPlan
+          && guaranteedFinish
           && isPokeCentered
           && normalNonChance
           && remainingGauge >= 16
           && remainingGauge <= 18
           && ce > 1
           && !oneGuaranteedLeftException;
-        const mustFinishNow = !!guaranteedPlan && !allowPokeEarlyPreserveComparison;
+        const mustFinishNow = guaranteedFinish && !allowPokeEarlyPreserveComparison;
 
         // 残り19以上では基本的に6を温存する。ただし最終遭遇や「6が余りそう」の
         // 目安に達した時は“6禁止を解除”するだけに留め、6を強制はしない。
@@ -665,7 +558,7 @@
 
         // PDF掲載表の開始条件に一致する時だけ、その表の初手を優先する。
         const pdfPreferredAi = mustFinishNow
-          ? pdfStartPreferredAction(cg, cp, cChance, s6, s5, s4, s3, s1)
+          ? pdfStartPreferredAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce)
           : -1;
 
         // 取り切りをハード制約にする状態だけ翌日送りを候補から外す。
@@ -691,9 +584,9 @@
 
           if (preserveS6 && a.id === 's6') continue;
 
-          if (mustFinishNow) {
-            const allowedAi = pdfPreferredAi >= 0 ? pdfPreferredAi : guaranteedPlan.seq[0];
-            if (ai !== allowedAi) continue;
+          if (mustFinishNow
+              && !actionPreservesGuaranteedFinish(ai, cg, cp, cChance, s6, s5, s4, s3, s1)) {
+            continue;
           }
 
           const evAfterEat = (ng) => {
@@ -735,11 +628,19 @@
             bestAction = ai;
             bestCatchProb = currentCatchProb;
           } else if (Math.abs(expectedValue - bestEV) <= EPS) {
-            // ストップと同値ならストップ維持。サブレ同士のみ元版と同じ補助順位で決定。
-            if (bestAction >= 0 && tieRank(a) < tieRank(actions[bestAction])) {
-              bestEV = expectedValue;
-              bestAction = ai;
-              bestCatchProb = currentCatchProb;
+            // ストップと同値ならストップ維持。サブレ同士では、PDF表の初手が候補なら
+            // それを最初のタイブレークにし、その後は記事どおり「同じ組み合わせなら小さい順」。
+            if (bestAction >= 0) {
+              const currentIsPdf = pdfPreferredAi >= 0 && ai === pdfPreferredAi;
+              const bestIsPdf = pdfPreferredAi >= 0 && bestAction === pdfPreferredAi;
+              const betterTie = currentIsPdf !== bestIsPdf
+                ? currentIsPdf
+                : tieRank(a) < tieRank(actions[bestAction]);
+              if (betterTie) {
+                bestEV = expectedValue;
+                bestAction = ai;
+                bestCatchProb = currentCatchProb;
+              }
             }
           }
         }
