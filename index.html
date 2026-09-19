@@ -14,6 +14,7 @@
     .fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     
+    /* スマホ・PCの標準スピナー（上下矢印）を消去してカスタムデザインを適用するため */
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
@@ -31,10 +32,9 @@
     const { useState, useEffect, useMemo, useCallback } = React;
 
     // --- 計算の高速化のためのグローバルキャッシュ ---
-    // シミュレーション中に同じ状態が何度も現れるため、結果を記録して再利用する
     const globalDpMemo = new Map();
 
-    // --- コンポーネントの独立宣言 ---
+    // --- コンポーネントの独立宣言 (フォーカス外れ・縦揃えレイアウト対策) ---
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
       const isInf = value === '∞';
       
@@ -59,6 +59,7 @@
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2 items-center">
             
+            {/* 左側：∞ボタンの配置スペース（無い場合も縦を揃えるため固定幅w-8を確保） */}
             <div className="w-8 flex justify-center">
               {hasInfinity && (
                 <button 
@@ -70,6 +71,7 @@
               )}
             </div>
             
+            {/* 右側：独立した[－] [数値] [＋] の横並びデザイン */}
             <div className="flex gap-1 items-center">
               <button 
                 onClick={handleDown} 
@@ -136,6 +138,7 @@
       const [isChance, setIsChance] = useState(false);
       const [fedCount, setFedCount] = useState(0);
       const [guaranteedCount, setGuaranteedCount] = useState(3);
+      const [isFull, setIsFull] = useState(false); // 満腹（終了）状態を管理するState
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
       
       const [history, setHistory] = useState([]);
@@ -150,10 +153,12 @@
           return;
         }
         
+        // "014" などの入力から先頭の0を取り除く（0単独の場合は消さない）
         let strVal = value.toString().replace(/^0+(?=\d)/, '');
         let parsed = parseInt(strVal, 10);
         if (isNaN(parsed) || parsed < 0) parsed = 0;
         
+        // ボーナスサブレ(4)は1を上限とする
         if (id === 's4' && parsed > 1) {
           parsed = 1;
           strVal = '1';
@@ -170,7 +175,7 @@
         setInventory(cleanedData);
         setFormData(cleanedData);
         
-        // 設定を大幅に変えた場合はキャッシュをクリアしてメモリを節約
+        // 設定を大幅に変えた場合はキャッシュをクリア
         globalDpMemo.clear(); 
       };
 
@@ -185,12 +190,9 @@
           if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
           if (cf >= 6) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
 
-          // キャッシュのキー（エンカウント数等も含むことでシミュレーション中の変動に対応）
           const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}`;
-          
           if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
 
-          // メモリ肥大化防止（スマホブラウザのクラッシュ回避）
           if (globalDpMemo.size > 50000) globalDpMemo.clear();
 
           const isHyper = cInv.s5 > 0 || (cInv.s3 !== '∞' && cInv.s3 > 0);
@@ -377,7 +379,6 @@
           setTimeout(runChunk, 0);
         };
 
-        // 操作が激しい間はシミュレーション開始を遅延（ディバウンス）させ処理落ちを防ぐ
         const debounceTimeoutId = setTimeout(startSimulation, 300);
 
         return () => { 
@@ -388,26 +389,29 @@
 
       // --- アクションハンドラ ---
       const handleThrow = (multiplier) => {
-        if (multiplier === 0) {
-          alert("満腹になりました。今日の判定は終了です。リセットまたは次の出会いへ進んでください。");
-          return;
-        }
-        
         const actId = currentBestMove.id;
         if (!actId) return;
+
+        // 投げる前の状態をすべて履歴に保存
+        setHistory(prev => [...prev, {
+          gauge,
+          fedCount,
+          isChance,
+          isFull, // 満腹状態も保存
+          inventory: { ...inventory },
+          formData: { ...formData }
+        }]);
+
+        // 満腹時はフラグを立てて終了（ゲージや在庫は減らない）
+        if (multiplier === 0) {
+          setIsFull(true);
+          return;
+        }
 
         let actualMultiplier = multiplier;
         if (isChance && multiplier === 1) {
           actualMultiplier = 3;
         }
-
-        setHistory(prev => [...prev, {
-          gauge,
-          fedCount,
-          isChance,
-          inventory: { ...inventory },
-          formData: { ...formData }
-        }]);
 
         let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? 4 : actId === 's3' ? 3 : 1;
         let added = actualMultiplier === 30 ? 30 : val * actualMultiplier;
@@ -429,6 +433,7 @@
         setGauge(last.gauge);
         setFedCount(last.fedCount);
         setIsChance(last.isChance);
+        setIsFull(last.isFull || false); // 満腹状態を復元
         setInventory(last.inventory);
         setFormData(last.formData);
         setHistory(prev => prev.slice(0, -1));
@@ -439,6 +444,7 @@
           setGauge(0);
           setFedCount(0);
           setIsChance(false);
+          setIsFull(false);
           setHistory([]);
         }
       };
@@ -449,6 +455,7 @@
         }
         setFedCount(0);
         setIsChance(false);
+        setIsFull(false);
         setHistory([]);
 
         setInventory(prev => {
@@ -496,15 +503,15 @@
               </div>
 
               <div className="flex gap-4 mb-4 bg-purple-50 p-3 rounded-xl border border-purple-100">
-                <label className="flex items-center space-x-2 text-sm font-bold text-purple-900 w-full cursor-pointer">
-                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0 || gauge >= 30} />
+                <label className={`flex items-center space-x-2 text-sm font-bold w-full cursor-pointer ${fedCount > 0 || gauge >= 30 || isFull ? 'text-gray-400 opacity-70' : 'text-purple-900'}`}>
+                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0 || gauge >= 30 || isFull} />
                   <span>チャンス状態 (1投目のみ)</span>
                 </label>
               </div>
 
               <div className="flex justify-between items-center mb-1 text-sm font-medium text-gray-700">
                 <span>確定ライン:</span>
-                <select value={guaranteedCount} onChange={(e) => setGuaranteedCount(Number(e.target.value))} className="border-gray-300 rounded shadow-sm focus:ring-purple-500 p-1 bg-gray-50">
+                <select value={guaranteedCount} onChange={(e) => setGuaranteedCount(Number(e.target.value))} className="border-gray-300 rounded shadow-sm focus:ring-purple-500 p-1 bg-gray-50" disabled={isFull}>
                   <option value={3}>3枚 (通常)</option>
                   <option value={2}>2枚</option>
                 </select>
@@ -513,9 +520,10 @@
 
               <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100">
                 <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
-                <p className="text-3xl font-black text-purple-900 mb-3">{currentBestMove.type}</p>
+                <p className="text-3xl font-black text-purple-900 mb-3">{isFull ? '満腹 (逃走)' : currentBestMove.type}</p>
                 
-                {currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
+                {/* 満腹時以外のルート表示 */}
+                {!isFull && currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
                   <div className="mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full fade-in">
                     <div className="flex justify-between border-b border-gray-100 pb-2 mb-2">
                       <span className="font-bold text-gray-600">この回の捕獲確率:</span>
@@ -539,8 +547,9 @@
                     </div>
                   </div>
                 )}
-                
-                {currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
+
+                {/* 満腹時以外の判定ボタン */}
+                {!isFull && currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
                   <>
                     <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数は自動で減ります）</p>
                     <div className="grid grid-cols-2 gap-2 mb-2">
@@ -549,17 +558,26 @@
                       <button onClick={() => handleThrow(30)} className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-3 rounded-xl font-bold active:opacity-80 shadow-sm transition-transform active:scale-95">超成功 (一発)</button>
                       <button onClick={() => handleThrow(0)} className="bg-gray-400 text-white py-3 rounded-xl font-bold active:bg-gray-500 shadow-sm transition-transform active:scale-95">満腹 (逃走)</button>
                     </div>
-                    
-                    {history.length > 0 && (
-                      <button onClick={undoMove} className="w-full mt-2 py-2 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 hover:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
-                        1手戻る (誤タップ修正)
-                      </button>
-                    )}
                   </>
                 )}
+
+                {/* 満腹時のメッセージパネル */}
+                {isFull && (
+                  <div className="mb-4 bg-gray-100 rounded-lg p-4 text-sm text-gray-700 shadow-sm border border-gray-200 text-center fade-in">
+                    <p className="font-black text-gray-600 mb-1 text-lg">満腹になりました</p>
+                    <p className="text-xs text-gray-500 font-bold">今日の判定はここで終了です。<br/>「次の出会いへ進む」を押してください。</p>
+                  </div>
+                )}
+                
+                {/* 常時表示のUndoボタン (履歴がある場合のみ) */}
+                {history.length > 0 && (
+                  <button onClick={undoMove} className="w-full mt-2 py-3 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 hover:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+                    1手戻る (誤タップ修正)
+                  </button>
+                )}
               </div>
-              <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 hover:bg-gray-200 transition-colors">次の出会いへ進む (残り回数-1)</button>
+              <button onClick={resetEncounter} className="w-full mt-4 py-4 bg-purple-100 text-purple-700 font-black text-sm rounded-xl active:bg-purple-200 hover:bg-purple-200 transition-colors shadow-sm">次の出会いへ進む (残り回数-1)</button>
             </div>
 
             <div className="bg-white rounded-2xl shadow-sm p-5 flex items-center justify-between">
