@@ -14,7 +14,6 @@
     .fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     
-    /* スマホ・PCの標準スピナー（上下矢印）を消去してカスタムデザインを適用するため */
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
@@ -31,7 +30,11 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback } = React;
 
-    // --- コンポーネントの独立宣言 (フォーカス外れ・縦揃えレイアウト対策) ---
+    // --- 計算の高速化のためのグローバルキャッシュ ---
+    // シミュレーション中に同じ状態が何度も現れるため、結果を記録して再利用する
+    const globalDpMemo = new Map();
+
+    // --- コンポーネントの独立宣言 ---
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
       const isInf = value === '∞';
       
@@ -48,7 +51,6 @@
         onChange(id, Math.max(0, curr - 1));
       };
 
-      // ボタンの無効化（グレーアウト）判定
       const isDownDisabled = isInf || (value === '' ? 0 : parseInt(value, 10)) <= 0;
       const isUpDisabled = isInf || (max !== undefined && (value === '' ? 0 : parseInt(value, 10)) >= max);
 
@@ -57,7 +59,6 @@
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2 items-center">
             
-            {/* 左側：∞ボタンの配置スペース（無い場合も縦を揃えるため固定幅w-8を確保） */}
             <div className="w-8 flex justify-center">
               {hasInfinity && (
                 <button 
@@ -69,7 +70,6 @@
               )}
             </div>
             
-            {/* 右側：独立した[－] [数値] [＋] の横並びデザイン */}
             <div className="flex gap-1 items-center">
               <button 
                 onClick={handleDown} 
@@ -150,12 +150,10 @@
           return;
         }
         
-        // "014" などの入力から先頭の0を取り除く（0単独の場合は消さない）
         let strVal = value.toString().replace(/^0+(?=\d)/, '');
         let parsed = parseInt(strVal, 10);
         if (isNaN(parsed) || parsed < 0) parsed = 0;
         
-        // ボーナスサブレ(4)は1を上限とする
         if (id === 's4' && parsed > 1) {
           parsed = 1;
           strVal = '1';
@@ -171,6 +169,9 @@
         });
         setInventory(cleanedData);
         setFormData(cleanedData);
+        
+        // 設定を大幅に変えた場合はキャッシュをクリアしてメモリを節約
+        globalDpMemo.clear(); 
       };
 
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
@@ -180,35 +181,35 @@
         const CATCH_REWARD = 2000; 
         const GAUGE_VALUE = 20;    
 
-        if (g >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
-        if (f >= 6) return { ev: g * GAUGE_VALUE, catchProb: 0.0, action: null };
-
-        const isHyper = inv.s5 > 0 || (inv.s3 !== '∞' && inv.s3 > 0);
-        const surplusThreshold = isHyper ? enc + 3 : enc * 2;
-        const isS6Surplus = inv.s6 !== '∞' && inv.s6 >= surplusThreshold;
-        const isLastDay = enc <= 1;
-        
-        let cost6 = 200; 
-        if (isLastDay) cost6 = 10; 
-        else if (isS6Surplus) cost6 = 80; 
-
-        const costs = { s6: cost6, s5: 50, s4: 0, s3: 30, s1: 10 };
-        const sables = [
-          { id: 's6', val: 6, name: 'ミュウツー(6)' },
-          { id: 's5', val: 5, name: 'ハイパー(5)' },
-          { id: 's4', val: 4, name: 'ボーナス(4)' },
-          { id: 's3', val: 3, name: 'スーパー(3)' },
-          { id: 's1', val: 1, name: 'ポケ(1)' }
-        ];
-
-        const memo = {};
-
-        const calcDP = (cg, cf, cChance, cInv) => {
+        const calcDP = (cg, cf, cChance, cInv, cEnc) => {
           if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
           if (cf >= 6) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
 
-          const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}`;
-          if (memo[memoKey]) return memo[memoKey];
+          // キャッシュのキー（エンカウント数等も含むことでシミュレーション中の変動に対応）
+          const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}`;
+          
+          if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
+
+          // メモリ肥大化防止（スマホブラウザのクラッシュ回避）
+          if (globalDpMemo.size > 50000) globalDpMemo.clear();
+
+          const isHyper = cInv.s5 > 0 || (cInv.s3 !== '∞' && cInv.s3 > 0);
+          const surplusThreshold = isHyper ? cEnc + 3 : cEnc * 2;
+          const isS6Surplus = cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold;
+          const isLastDay = cEnc <= 1;
+          
+          let cost6 = 200; 
+          if (isLastDay) cost6 = 10; 
+          else if (isS6Surplus) cost6 = 80; 
+
+          const costs = { s6: cost6, s5: 50, s4: 0, s3: 30, s1: 10 };
+          const sables = [
+            { id: 's6', val: 6, name: 'ミュウツー(6)' },
+            { id: 's5', val: 5, name: 'ハイパー(5)' },
+            { id: 's4', val: 4, name: 'ボーナス(4)' },
+            { id: 's3', val: 3, name: 'スーパー(3)' },
+            { id: 's1', val: 1, name: 'ポケ(1)' }
+          ];
 
           let bestVal = -Infinity;
           let bestAct = null;
@@ -236,11 +237,11 @@
 
             const evaluateEatEv = (nextG) => {
               if (nextG >= 30) return CATCH_REWARD;
-              return calcDP(nextG, cf + 1, false, nextInv).ev;
+              return calcDP(nextG, cf + 1, false, nextInv, cEnc).ev;
             };
             const evaluateEatProb = (nextG) => {
               if (nextG >= 30) return 1.0;
-              return calcDP(nextG, cf + 1, false, nextInv).catchProb;
+              return calcDP(nextG, cf + 1, false, nextInv, cEnc).catchProb;
             };
 
             if (cChance) {
@@ -265,11 +266,11 @@
             }
           }
           const res = { ev: bestVal, catchProb: bestProb, action: bestAct };
-          memo[memoKey] = res;
+          globalDpMemo.set(memoKey, res);
           return res;
         };
 
-        return calcDP(g, f, chance, inv);
+        return calcDP(g, f, chance, inv, enc);
       }, []);
 
       const expectedRouteData = useMemo(() => {
@@ -302,76 +303,87 @@
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
       }, [gauge, fedCount, isChance, guaranteedCount, inventory, getBestAction]);
 
-      // --- モンテカルロ・シミュレーション (非同期チャンク化) ---
+      // --- モンテカルロ・シミュレーション (ディバウンス＆非同期化) ---
       useEffect(() => {
-        let totalCatches = 0;
-        const TRIALS = 500; 
-        const CHUNK_SIZE = 50;
-        let currentTrial = 0;
-        let isCancelled = false;
-
         setSimExpectedCatches("計算中...");
-
-        const runChunk = () => {
+        
+        let isCancelled = false;
+        
+        const startSimulation = () => {
           if (isCancelled) return;
           
-          let catches = 0;
-          for (let i = 0; i < CHUNK_SIZE; i++) {
-            let simInv = { ...inventory };
-            let simGauge = 0; 
+          let totalCatches = 0;
+          const TRIALS = 500; 
+          const CHUNK_SIZE = 50;
+          let currentTrial = 0;
 
-            for (let e = 0; e < simInv.encounters; e++) {
-              let sf = 0;
-              let sChance = Math.random() < 0.1;
-              let active = true;
+          const runChunk = () => {
+            if (isCancelled) return;
+            
+            let catches = 0;
+            for (let i = 0; i < CHUNK_SIZE; i++) {
+              let simInv = { ...inventory };
+              let simGauge = 0; 
 
-              while (active && simGauge < 30) {
-                const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, 3);
-                if (!res || !res.action) break;
-                const action = res.action;
+              for (let e = 0; e < simInv.encounters; e++) {
+                let sf = 0;
+                let sChance = Math.random() < 0.1;
+                let active = true;
 
-                let multiplier = 1;
-                if (sChance && sf === 0) {
-                  multiplier = Math.random() < 0.1 ? 30 : 3;
-                } else {
-                  const r = Math.random();
-                  if (r < 0.02) multiplier = 30;
-                  else if (r < 0.10) multiplier = 3;
-                }
+                while (active && simGauge < 30) {
+                  const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, 3);
+                  if (!res || !res.action) break;
+                  const action = res.action;
 
-                if (sf >= 3 && Math.random() < 0.4) {
-                  active = false; 
-                  break;
-                }
+                  let multiplier = 1;
+                  if (sChance && sf === 0) {
+                    multiplier = Math.random() < 0.1 ? 30 : 3;
+                  } else {
+                    const r = Math.random();
+                    if (r < 0.02) multiplier = 30;
+                    else if (r < 0.10) multiplier = 3;
+                  }
 
-                if (simInv[action.id] !== '∞') simInv[action.id]--;
+                  if (sf >= 3 && Math.random() < 0.4) {
+                    active = false; 
+                    break;
+                  }
 
-                simGauge = Math.min(30, simGauge + action.val * multiplier);
-                sf++;
-                sChance = false;
+                  if (simInv[action.id] !== '∞') simInv[action.id]--;
 
-                if (simGauge >= 30) {
-                  catches++;
-                  simGauge = 0; 
-                  active = false;
+                  simGauge = Math.min(30, simGauge + action.val * multiplier);
+                  sf++;
+                  sChance = false;
+
+                  if (simGauge >= 30) {
+                    catches++;
+                    simGauge = 0; 
+                    active = false;
+                  }
                 }
               }
             }
-          }
-          
-          totalCatches += catches;
-          currentTrial += CHUNK_SIZE;
+            
+            totalCatches += catches;
+            currentTrial += CHUNK_SIZE;
 
-          if (currentTrial < TRIALS) {
-            setTimeout(runChunk, 0); 
-          } else {
-            setSimExpectedCatches((totalCatches / TRIALS).toFixed(2));
-          }
+            if (currentTrial < TRIALS) {
+              setTimeout(runChunk, 0); 
+            } else {
+              setSimExpectedCatches((totalCatches / TRIALS).toFixed(2));
+            }
+          };
+
+          setTimeout(runChunk, 0);
         };
 
-        setTimeout(runChunk, 0);
+        // 操作が激しい間はシミュレーション開始を遅延（ディバウンス）させ処理落ちを防ぐ
+        const debounceTimeoutId = setTimeout(startSimulation, 300);
 
-        return () => { isCancelled = true; };
+        return () => { 
+          isCancelled = true; 
+          clearTimeout(debounceTimeoutId);
+        };
       }, [inventory, getBestAction]);
 
       // --- アクションハンドラ ---
@@ -443,7 +455,7 @@
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
           if (curr > 0) next.encounters = curr - 1;
-          next.s4 = 1; // 次の出会いでボーナスサブレを自動回復
+          next.s4 = 1; 
           return next;
         });
 
@@ -451,7 +463,7 @@
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
           if (curr > 0) next.encounters = curr - 1;
-          next.s4 = 1; // 次の出会いでボーナスサブレを自動回復
+          next.s4 = 1; 
           return next;
         });
       };
@@ -460,7 +472,7 @@
         <div className="min-h-screen max-w-md mx-auto bg-gray-200 flex flex-col pb-10">
           <header className="bg-white px-4 pt-8 pb-3 shadow-sm sticky top-0 z-10">
             <h1 className="text-lg font-black text-purple-900 tracking-tight flex items-center gap-2">
-              <span className="bg-purple-600 text-white px-2 py-1 rounded text-xs">Opt</span>ミュウツーサブレ
+              ミュウツーサブレ最適化ツール
             </h1>
           </header>
 
@@ -564,7 +576,6 @@
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
               <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
               <div className="space-y-3">
-                {/* 全ての入力行を共通コンポーネント化し、縦のラインを完璧に揃える */}
                 <InputRow id="s6" label="ミュウツーサブレ (6)" hasInfinity={false} value={formData.s6} onChange={handleFormChange} />
                 <InputRow id="s5" label="ハイパーサブレ (5)" hasInfinity={false} value={formData.s5} onChange={handleFormChange} />
                 <InputRow id="s4" label="ボーナスサブレ+ (4)" hasInfinity={false} value={formData.s4} onChange={handleFormChange} max={1} />
