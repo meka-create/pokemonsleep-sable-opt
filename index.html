@@ -59,13 +59,12 @@
       const handleFormChange = (id, value) => {
         let parsed = value;
         if (value !== '∞') {
-          parsed = parseInt(String(value).replace(/[^0-9]/g, ''), 10);
+          parsed = parseInt(value, 10);
           if (isNaN(parsed) || parsed < 0) parsed = 0;
         }
         setFormData(prev => ({ ...prev, [id]: parsed }));
       };
 
-      // 適用ボタン
       const applySettings = () => {
         setInventory(formData);
       };
@@ -74,15 +73,21 @@
 
       // --- 動的計画法（DP）コアエンジン ---
       const getBestAction = useCallback((g, f, chance, inv, enc, guar) => {
-        if (g >= 30) return { ev: 10000, catchProb: 1.0, action: null };
-        if (f >= 6) return { ev: g * 20, catchProb: 0.0, action: null };
+        const CATCH_REWARD = 1000; // 捕獲の絶対的価値
+        const GAUGE_VALUE = 15;    // 1ゲージあたりの持ち越し価値
 
+        if (g >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
+        if (f >= 6) return { ev: g * GAUGE_VALUE, catchProb: 0.0, action: null };
+
+        // 資料に基づくミュウツーサブレ(6)の相対価値の動的変動
+        const isHyper = inv.s5 > 0 || (inv.s3 !== '∞' && inv.s3 > 0);
+        const surplusThreshold = isHyper ? enc + 3 : enc * 2;
+        const isS6Surplus = inv.s6 !== '∞' && inv.s6 >= surplusThreshold;
         const isLastDay = enc <= 1;
-        const isS6Surplus = inv.s6 !== '∞' && inv.s6 >= enc + 3;
         
-        let cost6 = 200; 
-        if (isLastDay) cost6 = 10; 
-        else if (isS6Surplus) cost6 = 70; 
+        let cost6 = 180; // 基本は温存するため非常に重いコストを設定
+        if (isLastDay) cost6 = 0; // 最終日は惜しまず使う
+        else if (isS6Surplus) cost6 = 70; // 余っている場合はハイパーより優先させる
 
         const costs = { s6: cost6, s5: 80, s4: 0, s3: 40, s1: 10 };
         const sables = [
@@ -93,8 +98,6 @@
           { id: 's1', val: 1, name: 'ポケ(1)' }
         ];
 
-        const CATCH_REWARD = 10000;
-        const GAUGE_VALUE = 20;
         const memo = {};
 
         const calcDP = (cg, cf, cChance, cInv) => {
@@ -158,7 +161,6 @@
         return calcDP(g, f, chance, inv);
       }, []);
 
-      // 想定ルート（すべて通常成功で進行し、満腹にならなかった場合の手順）の生成
       const expectedRouteData = useMemo(() => {
         const route = [];
         let currG = gauge;
@@ -179,7 +181,6 @@
         return { route, finalG: currG };
       }, [gauge, fedCount, isChance, inventory, guaranteedCount, getBestAction]);
 
-      // 現在の実践用シミュレーターにおける最適な一手
       const currentBestMove = useMemo(() => {
         if (30 - gauge <= 0) return { type: '完了', id: null, prob: 1.0 };
         const res = getBestAction(gauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount);
@@ -187,7 +188,7 @@
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
       }, [gauge, fedCount, isChance, guaranteedCount, inventory, getBestAction]);
 
-      // --- モンテカルロ・シミュレーション (イベント完走予測) ---
+      // --- モンテカルロ・シミュレーション ---
       useEffect(() => {
         let totalCatches = 0;
         const TRIALS = 500; 
@@ -261,6 +262,10 @@
       };
 
       const resetEncounter = () => {
+        // バグ修正: 捕獲済みの場合はゲージをリセットする
+        if (gauge >= 30) {
+          setGauge(0);
+        }
         setFedCount(0);
         setIsChance(false);
         if (inventory.encounters > 0) {
@@ -271,20 +276,32 @@
       };
 
       // --- UI Components ---
-      const InputRow = ({ id, label, isS6 }) => (
+      const InputRow = ({ id, label, hasInfinity }) => (
         <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2">
-            <input 
-              type="text" 
-              inputMode={formData[id] === '∞' ? 'text' : 'numeric'}
-              value={formData[id]} 
-              onChange={(e) => handleFormChange(id, e.target.value)} 
-              className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none"
-            />
-            {!isS6 && (
-              <button onClick={() => handleFormChange(id, '∞')} className="px-3 bg-purple-100 text-purple-700 rounded text-sm font-bold active:bg-purple-200">
-                ∞
+            {formData[id] === '∞' ? (
+              <input 
+                type="text" 
+                value="∞" 
+                readOnly 
+                className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 bg-white outline-none"
+              />
+            ) : (
+              <input 
+                type="number" 
+                min="0"
+                value={formData[id]} 
+                onChange={(e) => handleFormChange(id, e.target.value)} 
+                className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none"
+              />
+            )}
+            {hasInfinity && (
+              <button 
+                onClick={() => handleFormChange(id, formData[id] === '∞' ? '0' : '∞')} 
+                className="px-2 bg-purple-100 text-purple-700 rounded text-xs font-bold active:bg-purple-200"
+              >
+                ∞切替
               </button>
             )}
           </div>
@@ -301,7 +318,6 @@
 
           <main className="flex-1 overflow-y-auto p-4 space-y-4">
             
-            {/* 1. シミュレーター領域 (上部) */}
             <div className="bg-white rounded-2xl shadow-sm p-5 border-t-4 border-purple-600">
               <h2 className="text-sm font-bold text-gray-500 mb-4">実践シミュレーター</h2>
               <div className="flex items-center justify-between mb-2">
@@ -309,12 +325,12 @@
                 <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-3 mb-5 overflow-hidden">
-                <div className="bg-purple-600 h-3 rounded-full transition-all duration-500 ease-out" style={{ width: `${(gauge / 30) * 100}%` }}></div>
+                <div className="bg-purple-600 h-3 rounded-full transition-all duration-500 ease-out" style={{ width: `${(Math.min(30, gauge) / 30) * 100}%` }}></div>
               </div>
 
               <div className="flex gap-4 mb-4 bg-purple-50 p-3 rounded-xl border border-purple-100">
                 <label className="flex items-center space-x-2 text-sm font-bold text-purple-900 w-full cursor-pointer">
-                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0} />
+                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0 || gauge >= 30} />
                   <span>チャンス状態 (1投目のみ)</span>
                 </label>
               </div>
@@ -332,7 +348,6 @@
                 <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
                 <p className="text-3xl font-black text-purple-900 mb-3">{currentBestMove.type}</p>
                 
-                {/* 確率と想定ルートの表示パネル */}
                 {currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
                   <div className="mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full fade-in">
                     <div className="flex justify-between border-b border-gray-100 pb-2 mb-2">
@@ -373,7 +388,6 @@
               <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 transition-colors">次の出会いへ進む (残り回数-1)</button>
             </div>
 
-            {/* 2. イベント完走予測 (中段) */}
             <div className="bg-white rounded-2xl shadow-sm p-5 flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-bold text-gray-800">イベント完走予測</h2>
@@ -385,12 +399,11 @@
               </div>
             </div>
 
-            {/* 3. 所持数設定 (下部) */}
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
               <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
               <div className="space-y-3">
-                <InputRow id="s6" label="ミュウツー (6)" isS6={true} />
-                <InputRow id="s5" label="ハイパー (5)" isS6={false} />
+                <InputRow id="s6" label="ミュウツー (6)" hasInfinity={false} />
+                <InputRow id="s5" label="ハイパー (5)" hasInfinity={false} />
                 
                 <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                   <span className="text-sm font-medium text-gray-700">ボーナス+ (4)</span>
@@ -400,16 +413,15 @@
                   </select>
                 </div>
 
-                <InputRow id="s3" label="スーパー (3)" isS6={false} />
-                <InputRow id="s1" label="ポケ (1)" isS6={false} />
+                <InputRow id="s3" label="スーパー (3)" hasInfinity={true} />
+                <InputRow id="s1" label="ポケ (1)" hasInfinity={true} />
                 
                 <div className="flex justify-between items-center pt-2">
                   <span className="text-sm font-bold text-gray-700">残り出会い回数</span>
-                  <input type="number" value={formData.encounters} onChange={(e) => handleFormChange('encounters', e.target.value)} className="w-16 p-1 border-2 border-purple-300 rounded text-center bg-purple-50 font-bold focus:outline-none" min="0" />
+                  <input type="number" min="0" value={formData.encounters} onChange={(e) => handleFormChange('encounters', e.target.value)} className="w-16 p-1 border-2 border-purple-300 rounded text-center bg-purple-50 font-bold focus:outline-none" />
                 </div>
               </div>
 
-              {/* 変更があった時のみ表示される適用ボタン */}
               {isModified && (
                 <div className="mt-5 fade-in">
                   <button onClick={applySettings} className="w-full bg-purple-600 text-white py-3 rounded-xl font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-transform text-lg">
