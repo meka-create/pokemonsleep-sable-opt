@@ -256,6 +256,31 @@
       let keySpace = 31 * radix.phase * 2;
       keySpace *= radix.s6 * radix.s5 * radix.s4 * radix.s3 * radix.s1 * radix.enc;
       const useNumericKey = Number.isSafeInteger(keySpace) && keySpace <= Number.MAX_SAFE_INTEGER;
+      const makeMemo = () => {
+        const DENSE_LIMIT = 10000000;
+        if (useNumericKey && keySpace <= DENSE_LIMIT) {
+          const ev = new Float64Array(keySpace);
+          const action = new Int8Array(keySpace);
+          action.fill(-128);
+          let memoSize = 0;
+          return {
+            getEV(k) { return action[k] === -128 ? undefined : ev[k]; },
+            getAction(k) { return action[k]; },
+            set(k, value, bestAction) {
+              if (action[k] === -128) memoSize++;
+              ev[k] = value; action[k] = bestAction;
+            },
+            get size() { return memoSize; }
+          };
+        }
+        const map = new Map();
+        return {
+          getEV(k) { const v = map.get(k); return v === undefined ? undefined : v[0]; },
+          getAction(k) { const v = map.get(k); return v === undefined ? -128 : v[1]; },
+          set(k, value, bestAction) { map.set(k, [value, bestAction]); },
+          get size() { return map.size; }
+        };
+      };
 
       return {
         premium,
@@ -266,7 +291,7 @@
         maxCounts,
         radix,
         useNumericKey,
-        memo: new Map()
+        memo: makeMemo()
       };
     }
 
@@ -494,19 +519,19 @@
       const nextEncounterEV = (gCarry, s6, s5, s3, s1, ce) => {
         if (ce <= 1) return 0;
         // 次の出会いではボーナスサブレが1枚に戻り、チャンスを10%で再抽選。
-        return 0.1 * dp(gCarry, 0, 1, s6, s5, 1, s3, s1, ce - 1)[0]
-             + 0.9 * dp(gCarry, 0, 0, s6, s5, 1, s3, s1, ce - 1)[0];
+        return 0.1 * dp(gCarry, 0, 1, s6, s5, 1, s3, s1, ce - 1)
+             + 0.9 * dp(gCarry, 0, 0, s6, s5, 1, s3, s1, ce - 1);
       };
 
       function dp(cg, cp, cChance, s6, s5, s4, s3, s1, ce) {
-        if (ce <= 0) return [0, -1, 0];
+        if (ce <= 0) return 0;
 
         if (cg >= TARGET) {
-          return [1 + nextEncounterEV(0, s6, s5, s3, s1, ce), -1, 1];
+          return 1 + nextEncounterEV(0, s6, s5, s3, s1, ce);
         }
 
         const key = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
-        const hit = ctx.memo.get(key);
+        const hit = ctx.memo.getEV(key);
         if (hit !== undefined) return hit;
 
         const passEV = nextEncounterEV(cg, s6, s5, s3, s1, ce);
@@ -516,7 +541,6 @@
         const remainingGauge = TARGET - cg;
         const normalNonChance = !cChance;
         const type = strategyType(ce, s5, s3);
-        const isPokeCentered = type === 'poke';
 
         // 最新版X.pdfの「保証が残り1枚」の意味に限定する。
         // 以前のように「保証が残り1枚なら当日捕獲率を最大化」するのではなく、
@@ -531,19 +555,18 @@
             return cg + a.val * guaranteedMult >= TARGET;
           });
 
-        // X.pdfでは、ポケサブレ中心で遭遇がまだ残る場合、残り16〜18でも
-        // 6を温存した方が有利になる例がある。ここでは取り切りをハード制約にせず、
-        // DPに「今取る」対「温存する」を比較させる。最終遭遇と、最後の確定1投で
-        // そのまま捕獲できる場合は従来どおり取り切りを優先する。
-        const allowPokeEarlyPreserveComparison = pdfStandardMode
+        // X記事は3タイプを固定せず手持ちに応じて行き来する前提なので、
+        // 残り16〜18ではタイプを問わず「今100%で取り切る」対「高価な在庫を温存する」
+        // をDPで直接比較する。最終遭遇と、最後の確定1投だけで捕獲できる場合は
+        // 記事どおり取り切りを優先する。
+        const allowEarlyPreserveComparison = pdfStandardMode
           && guaranteedFinish
-          && isPokeCentered
           && normalNonChance
           && remainingGauge >= 16
           && remainingGauge <= 18
           && ce > 1
           && !oneGuaranteedLeftException;
-        const mustFinishNow = guaranteedFinish && !allowPokeEarlyPreserveComparison;
+        const mustFinishNow = guaranteedFinish && !allowEarlyPreserveComparison;
 
         // 残り19以上では基本的に6を温存する。ただし最終遭遇や「6が余りそう」の
         // 目安に達した時は“6禁止を解除”するだけに留め、6を強制はしない。
@@ -562,10 +585,9 @@
           : -1;
 
         // 取り切りをハード制約にする状態だけ翌日送りを候補から外す。
-        // ポケ中心16〜18の温存比較と、6余り目安到達後は通常のDP比較に戻す。
+        // 残り16〜18の温存比較と、6余り目安到達後は通常のDP比較に戻す。
         let bestEV = mustFinishNow ? -Infinity : passEV;
         let bestAction = mustFinishNow ? -3 : -2;
-        let bestCatchProb = 0;
         const eatProb = cp >= ctx.guar ? 0.6 : 1.0;
 
         for (let ai = 0; ai < actions.length; ai++) {
@@ -594,52 +616,48 @@
             if (clamped >= TARGET) {
               return 1 + nextEncounterEV(0, ns6, ns5, ns3, ns1, ce);
             }
-            return dp(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce)[0];
-          };
-
-          const pAfterEat = (ng) => {
-            const clamped = Math.min(TARGET, ng);
-            if (clamped >= TARGET) return 1;
-            return dp(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce)[2];
+            return dp(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce);
           };
 
           let eatEV;
-          let eatCatchProb;
           if (cChance && cp === 0) {
             eatEV = 0.10 * evAfterEat(TARGET)
                   + 0.90 * evAfterEat(cg + a.val * 3);
-            eatCatchProb = 0.10
-                         + 0.90 * pAfterEat(cg + a.val * 3);
           } else {
             eatEV = 0.02 * evAfterEat(TARGET)
                   + 0.08 * evAfterEat(cg + a.val * 3)
                   + 0.90 * evAfterEat(cg + a.val);
-            eatCatchProb = 0.02
-                         + 0.08 * pAfterEat(cg + a.val * 3)
-                         + 0.90 * pAfterEat(cg + a.val);
           }
 
           // 食べなかった場合はサブレ非消費でその出会いだけ終了。
           const expectedValue = eatProb * eatEV + (1 - eatProb) * passEV;
-          const currentCatchProb = eatProb * eatCatchProb;
 
           if (expectedValue > bestEV + EPS) {
             bestEV = expectedValue;
             bestAction = ai;
-            bestCatchProb = currentCatchProb;
           } else if (Math.abs(expectedValue - bestEV) <= EPS) {
-            // ストップと同値ならストップ維持。サブレ同士では、PDF表の初手が候補なら
-            // それを最初のタイブレークにし、その後は記事どおり「同じ組み合わせなら小さい順」。
-            if (bestAction >= 0) {
+            // 残り16〜18の比較で期待値が同値なら、記事の「基本は捕まえ切り」に合わせて
+            // 100%取り切りを維持する行動を優先する。それ以外はPDF表→小さい順で決める。
+            const currentKeepsGuarantee = allowEarlyPreserveComparison
+              && actionPreservesGuaranteedFinish(ai, cg, cp, cChance, s6, s5, s4, s3, s1);
+            if (bestAction === -2) {
+              if (currentKeepsGuarantee) {
+                bestEV = expectedValue;
+                bestAction = ai;
+              }
+            } else if (bestAction >= 0) {
+              const bestKeepsGuarantee = allowEarlyPreserveComparison
+                && actionPreservesGuaranteedFinish(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1);
               const currentIsPdf = pdfPreferredAi >= 0 && ai === pdfPreferredAi;
               const bestIsPdf = pdfPreferredAi >= 0 && bestAction === pdfPreferredAi;
-              const betterTie = currentIsPdf !== bestIsPdf
-                ? currentIsPdf
-                : tieRank(a) < tieRank(actions[bestAction]);
+              const betterTie = currentKeepsGuarantee !== bestKeepsGuarantee
+                ? currentKeepsGuarantee
+                : (currentIsPdf !== bestIsPdf
+                    ? currentIsPdf
+                    : tieRank(a) < tieRank(actions[bestAction]));
               if (betterTie) {
                 bestEV = expectedValue;
                 bestAction = ai;
-                bestCatchProb = currentCatchProb;
               }
             }
           }
@@ -650,12 +668,10 @@
         if (bestAction === -3) {
           bestEV = passEV;
           bestAction = -2;
-          bestCatchProb = 0;
         }
 
-        const out = [bestEV, bestAction, bestCatchProb];
-        ctx.memo.set(key, out);
-        return out;
+        ctx.memo.set(key, bestEV, bestAction);
+        return bestEV;
       }
 
       // 捕獲済み／満腹直後は、現在の出会いを終了済みとして「次回以降」だけの期待値を返す。
@@ -665,8 +681,8 @@
         let futureEV = 0;
         if (enc > 1) {
           const carryG = g >= TARGET ? 0 : g;
-          futureEV = 0.1 * dp(carryG, 0, 1, startInv.s6, startInv.s5, 1, startInv.s3, startInv.s1, enc - 1)[0]
-                   + 0.9 * dp(carryG, 0, 0, startInv.s6, startInv.s5, 1, startInv.s3, startInv.s1, enc - 1)[0];
+          futureEV = 0.1 * dp(carryG, 0, 1, startInv.s6, startInv.s5, 1, startInv.s3, startInv.s1, enc - 1)
+                   + 0.9 * dp(carryG, 0, 0, startInv.s6, startInv.s5, 1, startInv.s3, startInv.s1, enc - 1);
         }
         return {
           ev: futureEV,
@@ -680,7 +696,45 @@
         };
       }
 
-      const base = dp(
+      const policyAction = (cg, cp, cChance, s6, s5, s4, s3, s1, ce) => {
+        if (ce <= 0 || cg >= TARGET) return -1;
+        const key = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+        dp(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+        return ctx.memo.getAction(key);
+      };
+
+      // 捕獲確率は最適行動の決定には使わない。方策確定後に現在遭遇だけを辿り、
+      // 同じ確率モデルで厳密に算出することで巨大DPの状態値を軽量化する。
+      const catchMemo = new Map();
+      const policyCatchProb = (cg, cp, cChance, s6, s5, s4, s3, s1, ce) => {
+        if (cg >= TARGET) return 1;
+        if (ce <= 0) return 0;
+        const k = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+        const cached = catchMemo.get(k);
+        if (cached !== undefined) return cached;
+        const ai = policyAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce);
+        if (ai < 0) { catchMemo.set(k, 0); return 0; }
+        const a = actions[ai];
+        const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+        const np = Math.min(ctx.guar, cp + 1);
+        const afterEat = (ng) => {
+          const clamped = Math.min(TARGET, ng);
+          return clamped >= TARGET ? 1 : policyCatchProb(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce);
+        };
+        let pEat;
+        if (cChance && cp === 0) pEat = 0.10 + 0.90 * afterEat(cg + a.val * 3);
+        else pEat = 0.02 + 0.08 * afterEat(cg + a.val * 3) + 0.90 * afterEat(cg + a.val);
+        const eatProb = cp >= ctx.guar ? 0.6 : 1.0;
+        const out = eatProb * pEat;
+        catchMemo.set(k, out);
+        return out;
+      };
+
+      const baseEV = dp(
+        g, phase, chance ? 1 : 0,
+        startInv.s6, startInv.s5, startInv.s4, startInv.s3, startInv.s1, enc
+      );
+      const baseAction = policyAction(
         g, phase, chance ? 1 : 0,
         startInv.s6, startInv.s5, startInv.s4, startInv.s3, startInv.s1, enc
       );
@@ -694,9 +748,9 @@
       let rs6 = startInv.s6, rs5 = startInv.s5, rs4 = startInv.s4, rs3 = startInv.s3, rs1 = startInv.s1;
 
       for (let guard = 0; rg < TARGET && guard < 40; guard++) {
-        const r = dp(rg, rp, rChance ? 1 : 0, rs6, rs5, rs4, rs3, rs1, enc);
-        if (r[1] < 0) break;
-        const a = actions[r[1]];
+        const ai = policyAction(rg, rp, rChance ? 1 : 0, rs6, rs5, rs4, rs3, rs1, enc);
+        if (ai < 0) break;
+        const a = actions[ai];
         route.push(a.name);
 
         if (a.id === 's6' && rs6 !== -1) rs6--;
@@ -711,12 +765,12 @@
       }
 
       let action = null;
-      if (base[1] >= 0) action = actions[base[1]];
-      else if (base[1] === -2) action = { id: 'pass', val: 0, name: '➔ 翌日へ (ストップ)' };
+      if (baseAction >= 0) action = actions[baseAction];
+      else if (baseAction === -2) action = { id: 'pass', val: 0, name: '➔ 翌日へ (ストップ)' };
 
       return {
-        ev: base[0],
-        catchProb: base[2],
+        ev: baseEV,
+        catchProb: policyCatchProb(g, phase, chance ? 1 : 0, startInv.s6, startInv.s5, startInv.s4, startInv.s3, startInv.s1, enc),
         action,
         route,
         finalG: rg,
