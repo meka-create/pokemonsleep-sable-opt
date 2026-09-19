@@ -138,7 +138,7 @@
       const [isChance, setIsChance] = useState(false);
       const [fedCount, setFedCount] = useState(0);
       const [guaranteedCount, setGuaranteedCount] = useState(3);
-      const [isFull, setIsFull] = useState(false); // 満腹（終了）状態を管理するState
+      const [isFull, setIsFull] = useState(false); // 満腹状態の管理
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
       
       const [history, setHistory] = useState([]);
@@ -305,7 +305,7 @@
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
       }, [gauge, fedCount, isChance, guaranteedCount, inventory, getBestAction]);
 
-      // --- モンテカルロ・シミュレーション (ディバウンス＆非同期化) ---
+      // --- モンテカルロ・シミュレーション (非同期チャンク化) ---
       useEffect(() => {
         setSimExpectedCatches("計算中...");
         
@@ -397,12 +397,12 @@
           gauge,
           fedCount,
           isChance,
-          isFull, // 満腹状態も保存
+          isFull,
           inventory: { ...inventory },
           formData: { ...formData }
         }]);
 
-        // 満腹時はフラグを立てて終了（ゲージや在庫は減らない）
+        // 満腹時はフラグを立てて終了
         if (multiplier === 0) {
           setIsFull(true);
           return;
@@ -433,7 +433,7 @@
         setGauge(last.gauge);
         setFedCount(last.fedCount);
         setIsChance(last.isChance);
-        setIsFull(last.isFull || false); // 満腹状態を復元
+        setIsFull(last.isFull || false); 
         setInventory(last.inventory);
         setFormData(last.formData);
         setHistory(prev => prev.slice(0, -1));
@@ -479,7 +479,7 @@
         <div className="min-h-screen max-w-md mx-auto bg-gray-200 flex flex-col pb-10">
           <header className="bg-white px-4 pt-8 pb-3 shadow-sm sticky top-0 z-10">
             <h1 className="text-lg font-black text-purple-900 tracking-tight flex items-center gap-2">
-              ミュウツーサブレ最適化ツール
+              <span className="bg-purple-600 text-white px-2 py-1 rounded text-xs">Opt</span>ミュウツーサブレ
             </h1>
           </header>
 
@@ -522,7 +522,6 @@
                 <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
                 <p className="text-3xl font-black text-purple-900 mb-3">{isFull ? '満腹 (逃走)' : currentBestMove.type}</p>
                 
-                {/* 満腹時以外のルート表示 */}
                 {!isFull && currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
                   <div className="mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full fade-in">
                     <div className="flex justify-between border-b border-gray-100 pb-2 mb-2">
@@ -548,7 +547,6 @@
                   </div>
                 )}
 
-                {/* 満腹時以外の判定ボタン */}
                 {!isFull && currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
                   <>
                     <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数は自動で減ります）</p>
@@ -561,7 +559,6 @@
                   </>
                 )}
 
-                {/* 満腹時のメッセージパネル */}
                 {isFull && (
                   <div className="mb-4 bg-gray-100 rounded-lg p-4 text-sm text-gray-700 shadow-sm border border-gray-200 text-center fade-in">
                     <p className="font-black text-gray-600 mb-1 text-lg">満腹になりました</p>
@@ -569,7 +566,7 @@
                   </div>
                 )}
                 
-                {/* 常時表示のUndoボタン (履歴がある場合のみ) */}
+                {/* 満腹時・完了時でも履歴があればUndoボタンを表示 */}
                 {history.length > 0 && (
                   <button onClick={undoMove} className="w-full mt-2 py-3 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 hover:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
