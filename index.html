@@ -138,7 +138,7 @@
       const [isChance, setIsChance] = useState(false);
       const [fedCount, setFedCount] = useState(0);
       const [guaranteedCount, setGuaranteedCount] = useState(3);
-      const [isFull, setIsFull] = useState(false); // 満腹状態の管理
+      const [isFull, setIsFull] = useState(false);
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
       
       const [history, setHistory] = useState([]);
@@ -188,7 +188,8 @@
 
         const calcDP = (cg, cf, cChance, cInv, cEnc) => {
           if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
-          if (cf >= 6) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
+          // 深さ制限を10に引き上げ（実質的には自発的パスにより自然停止する）
+          if (cf >= 10) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
 
           const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}`;
           if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
@@ -216,6 +217,15 @@
           let bestVal = -Infinity;
           let bestAct = null;
           let bestProb = 0;
+
+          // --- 追加：自発的なパス（ストップ）の評価 ---
+          // 満腹リスクが高い、または割に合うサブレが無い場合、DPは自発的に投げるのをやめる選択をする
+          const passEv = cg * GAUGE_VALUE;
+          if (passEv > bestVal) {
+            bestVal = passEv;
+            bestAct = { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 };
+            bestProb = 0; // その回での捕獲率は0
+          }
 
           const currentEatProb = (cf >= guar) ? 0.6 : 1.0;
           const currentRejectProb = 1.0 - currentEatProb;
@@ -261,6 +271,7 @@
               expectedCatchProb = currentEatProb * eatProb;
             }
 
+            // 投げる期待値がパスの期待値を上回れば更新される
             if (expectedValue > bestVal) {
               bestVal = expectedValue;
               bestAct = sable;
@@ -282,9 +293,9 @@
         let currChance = isChance;
         let currInv = { ...inventory };
         
-        while (currG < 30 && currF < 6) {
+        while (currG < 30 && currF < 10) {
           const res = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount);
-          if (!res || !res.action) break;
+          if (!res || !res.action || res.action.id === 'pass') break;
           
           route.push(res.action.name);
           
@@ -301,7 +312,7 @@
       const currentBestMove = useMemo(() => {
         if (30 - gauge <= 0) return { type: '完了', id: null, prob: 1.0 };
         const res = getBestAction(gauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount);
-        if (!res || !res.action) return { type: '在庫なし', id: null, prob: 0.0 };
+        if (!res || !res.action) return { type: '➔ 翌日へ (ストップ)', id: 'pass', prob: 0.0 };
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
       }, [gauge, fedCount, isChance, guaranteedCount, inventory, getBestAction]);
 
@@ -334,7 +345,8 @@
 
                 while (active && simGauge < 30) {
                   const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, 3);
-                  if (!res || !res.action) break;
+                  // パスが選ばれた場合はその日の探索を終了し翌日へ
+                  if (!res || !res.action || res.action.id === 'pass') break;
                   const action = res.action;
 
                   let multiplier = 1;
@@ -390,9 +402,8 @@
       // --- アクションハンドラ ---
       const handleThrow = (multiplier) => {
         const actId = currentBestMove.id;
-        if (!actId) return;
+        if (!actId || actId === 'pass') return;
 
-        // 投げる前の状態をすべて履歴に保存
         setHistory(prev => [...prev, {
           gauge,
           fedCount,
@@ -402,7 +413,6 @@
           formData: { ...formData }
         }]);
 
-        // 満腹時はフラグを立てて終了
         if (multiplier === 0) {
           setIsFull(true);
           return;
@@ -517,14 +527,13 @@
                 </select>
               </div>
               
-              {/* 表示を「現在 1 枚目」からスタートするように修正 */}
               <p className="text-xs text-gray-400 text-right mb-4">現在 {fedCount + 1} 枚目（{fedCount >= guaranteedCount ? '⚠️満腹リスクあり' : '✅確定ライン'}）</p>
 
               <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100">
                 <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
                 <p className="text-3xl font-black text-purple-900 mb-3">{isFull ? '満腹 (逃走)' : currentBestMove.type}</p>
                 
-                {!isFull && currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
+                {!isFull && currentBestMove.type !== '完了' && currentBestMove.id !== 'pass' && (
                   <div className="mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full fade-in">
                     <div className="flex justify-between border-b border-gray-100 pb-2 mb-2">
                       <span className="font-bold text-gray-600">この回の捕獲確率:</span>
@@ -549,7 +558,7 @@
                   </div>
                 )}
 
-                {!isFull && currentBestMove.type !== '完了' && currentBestMove.type !== '在庫なし' && (
+                {!isFull && currentBestMove.type !== '完了' && currentBestMove.id !== 'pass' && (
                   <>
                     <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数は自動で減ります）</p>
                     <div className="grid grid-cols-2 gap-2 mb-2">
@@ -561,14 +570,22 @@
                   </>
                 )}
 
+                {/* 満腹時のメッセージパネル */}
                 {isFull && (
                   <div className="mb-4 bg-gray-100 rounded-lg p-4 text-sm text-gray-700 shadow-sm border border-gray-200 text-center fade-in">
                     <p className="font-black text-gray-600 mb-1 text-lg">満腹になりました</p>
                     <p className="text-xs text-gray-500 font-bold">今日の判定はここで終了です。<br/>「次の出会いへ進む」を押してください。</p>
                   </div>
                 )}
+
+                {/* ストップ（パス）時のメッセージパネル */}
+                {!isFull && currentBestMove.id === 'pass' && (
+                  <div className="mb-4 bg-purple-50 rounded-lg p-4 text-sm text-purple-900 shadow-sm border border-purple-200 text-center fade-in">
+                    <p className="font-black mb-1 text-lg">今日はここでストップ！</p>
+                    <p className="text-xs font-bold">無理をして投げるより、翌日に回す方がお得です。<br/>「次の出会いへ進む」を押してください。</p>
+                  </div>
+                )}
                 
-                {/* 満腹時・完了時でも履歴があればUndoボタンを表示 */}
                 {history.length > 0 && (
                   <button onClick={undoMove} className="w-full mt-2 py-3 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 hover:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
