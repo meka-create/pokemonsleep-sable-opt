@@ -29,26 +29,24 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo, useCallback } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
+    // --- 真の大局的最適化（多期間MDP）用キャッシュ ---
     const globalDpMemo = new Map();
 
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
       const isInf = value === '∞';
-      
       const handleUp = () => {
         if (isInf) return;
         const curr = value === '' ? 0 : parseInt(value, 10);
         if (max !== undefined && curr >= max) return;
         onChange(id, curr + 1);
       };
-      
       const handleDown = () => {
         if (isInf) return;
         const curr = value === '' ? 0 : parseInt(value, 10);
         onChange(id, Math.max(0, curr - 1));
       };
-
       const isDownDisabled = isInf || (value === '' ? 0 : parseInt(value, 10)) <= 0;
       const isUpDisabled = isInf || (max !== undefined && (value === '' ? 0 : parseInt(value, 10)) >= max);
 
@@ -67,30 +65,9 @@
               )}
             </div>
             <div className="flex gap-1 items-center">
-              <button 
-                onClick={handleDown} 
-                disabled={isDownDisabled} 
-                className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isDownDisabled ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300'}`}
-              >
-                −
-              </button>
-              <input 
-                type={isInf ? "text" : "number"}
-                inputMode={isInf ? "text" : "numeric"}
-                min="0"
-                max={max}
-                value={value} 
-                readOnly={isInf}
-                onChange={(e) => onChange(id, e.target.value)} 
-                className="w-12 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white"
-              />
-              <button 
-                onClick={handleUp} 
-                disabled={isUpDisabled} 
-                className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isUpDisabled ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300'}`}
-              >
-                ＋
-              </button>
+              <button onClick={handleDown} disabled={isDownDisabled} className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isDownDisabled ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300'}`}>−</button>
+              <input type={isInf ? "text" : "number"} inputMode={isInf ? "text" : "numeric"} min="0" max={max} value={value} readOnly={isInf} onChange={(e) => onChange(id, e.target.value)} className="w-12 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white" />
+              <button onClick={handleUp} disabled={isUpDisabled} className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isUpDisabled ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300'}`}>＋</button>
             </div>
           </div>
         </div>
@@ -102,28 +79,21 @@
         try {
           const item = window.localStorage.getItem(key);
           return item ? JSON.parse(item) : initialValue;
-        } catch (error) {
-          return initialValue;
-        }
+        } catch (error) { return initialValue; }
       });
       const setValue = (value) => {
         try {
           const valueToStore = value instanceof Function ? value(storedValue) : value;
           setStoredValue(valueToStore);
           window.localStorage.setItem(key, JSON.stringify(valueToStore));
-        } catch (error) {
-          console.error(error);
-        }
+        } catch (error) { console.error(error); }
       };
       return [storedValue, setValue];
     }
 
     const App = () => {
-      const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
-        s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
-      });
+      const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', { s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14 });
       const [formData, setFormData] = useState(inventory);
-      
       const [gauge, setGauge] = useLocalStorage('mewtwo_gauge', 0);
       const [isChance, setIsChance] = useLocalStorage('mewtwo_isChance', false);
       const [fedCount, setFedCount] = useLocalStorage('mewtwo_fedCount', 0);
@@ -132,19 +102,19 @@
       const [history, setHistory] = useLocalStorage('mewtwo_history', []);
       const [isPremium, setIsPremium] = useLocalStorage('mewtwo_isPremium', true);
 
-      const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
+      // AIエンジン（非同期計算結果）のステート
+      const [engineState, setEngineState] = useState({
+        isCalculating: false,
+        bestMove: { type: '計算中...', id: null, prob: 0 },
+        expectedTotal: "計算中...",
+        routeData: { route: [], finalG: 0 }
+      });
 
       const actualGauge = gauge === '' ? 0 : gauge;
 
       const handleFormChange = useCallback((id, value) => {
-        if (value === '∞') {
-          setFormData(prev => ({ ...prev, [id]: '∞' }));
-          return;
-        }
-        if (value === '') {
-          setFormData(prev => ({ ...prev, [id]: '' }));
-          return;
-        }
+        if (value === '∞') { setFormData(prev => ({ ...prev, [id]: '∞' })); return; }
+        if (value === '') { setFormData(prev => ({ ...prev, [id]: '' })); return; }
         let strVal = value.toString().replace(/^0+(?=\d)/, '');
         let parsed = parseInt(strVal, 10);
         if (isNaN(parsed) || parsed < 0) parsed = 0;
@@ -164,126 +134,116 @@
 
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
+      // =========================================================================
+      // 純粋期待値計算エンジン (一切の小細工・疑似コスト排除版)
+      // =========================================================================
       const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
-        const CATCH_REWARD = 2000; 
-
+        
+        // 戻り値: { ev: イベント最終日までの累計捕獲数の期待値, catchProb: 今日の捕獲確率, action: 最適な一手 }
         const calcDP = (cg, cf, cChance, cInv, cEnc) => {
-          if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
-          if (cf >= 10) return { ev: 0, catchProb: 0, action: null }; 
-
-          const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}-${premium}`;
-          if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
-
-          if (globalDpMemo.size > 50000) globalDpMemo.clear();
-
-          const isHyper = cInv.s5 > 0 || (cInv.s3 !== '∞' && cInv.s3 > 0);
-          const surplusThreshold = isHyper ? cEnc + 3 : cEnc * 2;
+          if (cEnc <= 0) return { ev: 0, catchProb: 0, action: null };
           
-          const isException1 = (cEnc <= 1); 
-          const isException2 = (cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold); 
-          const isException3 = (cf === guar - 1 && (30 - cg > 0) && (30 - cg <= 6)); 
-
-          let cost6 = 200; 
-          let priority6 = 1;
-
-          if (isException1 || isException2 || isException3) {
-            cost6 = -10; 
-            priority6 = 10;
+          if (cg >= 30) {
+            // 捕獲完了。翌日へ（ボーナスサブレ復活）
+            let nextInvDay = { ...cInv, s4: 1 }; 
+            let evNext = 0;
+            if (cEnc > 1) {
+              evNext = 0.1 * calcDP(0, 0, true, nextInvDay, cEnc - 1).ev + 0.9 * calcDP(0, 0, false, nextInvDay, cEnc - 1).ev;
+            }
+            return { ev: 1.0 + evNext, catchProb: 1.0, action: null };
+          }
+          
+          if (cf >= 10) { 
+            // 満腹（手動ストッパー用）。持ち越しゲージで翌日へ
+            let nextInvDay = { ...cInv, s4: 1 };
+            let evNext = 0;
+            if (cEnc > 1) {
+              evNext = 0.1 * calcDP(cg, 0, true, nextInvDay, cEnc - 1).ev + 0.9 * calcDP(cg, 0, false, nextInvDay, cEnc - 1).ev;
+            }
+            return { ev: evNext, catchProb: 0, action: { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 } };
           }
 
-          const isRiskState = (cf >= guar);
-          const RISK_COST = isRiskState ? 20 : 0; 
+          // 状態空間の刈り込み (過剰な在庫は期待値に影響しないため丸める)
+          const cap = (val) => val === '∞' ? 'inf' : Math.min(val, cEnc * 3 + 3);
+          const memoKey = `${cg}-${cf}-${cChance}-${cap(cInv.s6)}-${cap(cInv.s5)}-${cInv.s4}-${cap(cInv.s3)}-${cap(cInv.s1)}-${cEnc}-${guar}-${premium}`;
 
-          const getCost = (id, baseCost) => {
-            if (cInv[id] === '∞') return RISK_COST;
-            return baseCost + RISK_COST;
-          };
+          if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
+          if (globalDpMemo.size > 200000) globalDpMemo.clear(); // メモリ保護
 
-          const costs = { 
-            s6: getCost('s6', cost6), 
-            s5: getCost('s5', 50), 
-            s4: RISK_COST, 
-            s3: getCost('s3', 30), 
-            s1: getCost('s1', 10) 
-          };
+          // アクション「パス（翌日へストップ）」の純粋な期待値
+          let nextInvDay = { ...cInv, s4: 1 };
+          let passEv = 0;
+          if (cEnc > 1) {
+            passEv = 0.1 * calcDP(cg, 0, true, nextInvDay, cEnc - 1).ev + 0.9 * calcDP(cg, 0, false, nextInvDay, cEnc - 1).ev;
+          }
 
+          let bestEv = passEv;
+          let bestAct = { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 };
+          let bestCatchProb = 0;
+
+          // 同一期待値だった場合のタイブレーク優先順位 (パスを優先し、安いサブレから)
           const sables = [
             { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)', priority: 5 },
             { id: 's1', val: 1, name: 'ポケ(1)', priority: 4 },
             { id: 's3', val: 3, name: 'スーパー(3)', priority: 3 },
             { id: 's5', val: 5, name: 'ハイパー(5)', priority: 2 },
-            { id: 's6', val: 6, name: 'ミュウツー(6)', priority: priority6 }
+            { id: 's6', val: 6, name: 'ミュウツー(6)', priority: 1 }
           ];
 
-          let bestVal = -Infinity;
-          let bestAct = null;
-          let bestProb = 0;
-
-          let passEv = 0;
-          if (cEnc > 1) {
-            const bonusNextDay = premium ? 4 : 3;
-            const remainingGauge = Math.max(0, 30 - cg - bonusNextDay);
-            passEv = CATCH_REWARD - 200 - (remainingGauge * 10);
-          }
-
-          if (passEv > bestVal) {
-            bestVal = passEv;
-            bestAct = { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 };
-            bestProb = 0; 
-          }
-
-          const currentEatProb = (cf >= guar) ? 0.6 : 1.0;
-          const currentRejectProb = 1.0 - currentEatProb;
+          const eatProb = (cf >= guar) ? 0.6 : 1.0;
+          const rejectProb = 1.0 - eatProb;
 
           for (const sable of sables) {
-            const count = cInv[sable.id];
-            if (count !== '∞' && count <= 0) continue;
+            if (cInv[sable.id] !== '∞' && cInv[sable.id] <= 0) continue;
 
-            const nextInv = { ...cInv };
-            if (nextInv[sable.id] !== '∞') nextInv[sable.id] -= 1;
-            
-            const cost = costs[sable.id];
-            let expectedValue = 0;
-            let expectedCatchProb = 0;
+            let nextInvEat = { ...cInv };
+            if (nextInvEat[sable.id] !== '∞') nextInvEat[sable.id]--;
 
-            const evaluateEatEv = (nextG) => {
-              if (nextG >= 30) return CATCH_REWARD;
-              return calcDP(nextG, cf + 1, false, nextInv, cEnc).ev;
-            };
-            const evaluateEatProb = (nextG) => {
-              if (nextG >= 30) return 1.0;
-              return calcDP(nextG, cf + 1, false, nextInv, cEnc).catchProb;
+            const evalEatState = (newG) => {
+              if (newG >= 30) {
+                let nextInvSuccess = { ...nextInvEat, s4: 1 };
+                let evNext = 0;
+                if (cEnc > 1) {
+                  evNext = 0.1 * calcDP(0, 0, true, nextInvSuccess, cEnc - 1).ev + 0.9 * calcDP(0, 0, false, nextInvSuccess, cEnc - 1).ev;
+                }
+                return 1.0 + evNext;
+              }
+              return calcDP(newG, cf + 1, false, nextInvEat, cEnc).ev;
             };
 
-            if (cChance) {
-              const valBig = Math.min(30, cg + sable.val * 3);
-              const eatEv = (0.9 * evaluateEatEv(valBig)) + (0.1 * CATCH_REWARD) - cost;
-              const eatProb = (0.9 * evaluateEatProb(valBig)) + 0.1;
-              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * passEv);
-              expectedCatchProb = currentEatProb * eatProb;
+            const evalEatProb = (newG) => {
+              if (newG >= 30) return 1.0;
+              return calcDP(newG, cf + 1, false, nextInvEat, cEnc).catchProb;
+            };
+
+            let evEat = 0, probEat = 0;
+            if (cChance && cf === 0) {
+              evEat = 0.1 * evalEatState(30) + 0.9 * evalEatState(cg + sable.val * 3);
+              probEat = 0.1 * 1.0 + 0.9 * evalEatProb(cg + sable.val * 3);
             } else {
-              const valNorm = Math.min(30, cg + sable.val);
-              const valBig = Math.min(30, cg + sable.val * 3);
-              const eatEv = (0.9 * evaluateEatEv(valNorm)) + (0.08 * evaluateEatEv(valBig)) + (0.02 * CATCH_REWARD) - cost;
-              const eatProb = (0.9 * evaluateEatProb(valNorm)) + (0.08 * evaluateEatProb(valBig)) + 0.02;
-              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * passEv);
-              expectedCatchProb = currentEatProb * eatProb;
+              evEat = 0.02 * evalEatState(30) + 0.08 * evalEatState(cg + sable.val * 3) + 0.90 * evalEatState(cg + sable.val);
+              probEat = 0.02 * 1.0 + 0.08 * evalEatProb(cg + sable.val * 3) + 0.90 * evalEatProb(cg + sable.val);
             }
 
-            if (expectedValue > bestVal + 1e-6) {
-              bestVal = expectedValue;
+            // 弾かれた場合はアイテム消費なしで翌日へ (passEv)
+            let expectedValue = eatProb * evEat + rejectProb * passEv;
+            let currentCatchProb = eatProb * probEat;
+
+            if (expectedValue > bestEv + 1e-7) {
+              bestEv = expectedValue;
               bestAct = sable;
-              bestProb = expectedCatchProb;
-            } else if (Math.abs(expectedValue - bestVal) <= 1e-6) {
-              const currentPriority = bestAct.id === 'pass' ? -1 : bestAct.priority;
+              bestCatchProb = currentCatchProb;
+            } else if (Math.abs(expectedValue - bestEv) <= 1e-7) {
+              let currentPriority = bestAct.id === 'pass' ? 6 : bestAct.priority;
               if (sable.priority > currentPriority) {
-                bestVal = expectedValue;
+                bestEv = expectedValue;
                 bestAct = sable;
-                bestProb = expectedCatchProb;
+                bestCatchProb = currentCatchProb;
               }
             }
           }
-          const res = { ev: bestVal, catchProb: bestProb, action: bestAct };
+
+          const res = { ev: bestEv, catchProb: bestCatchProb, action: bestAct };
           globalDpMemo.set(memoKey, res);
           return res;
         };
@@ -291,159 +251,68 @@
         return calcDP(g, f, chance, inv, enc);
       }, []);
 
-      const expectedRouteData = useMemo(() => {
-        const route = [];
-        let currG = actualGauge;
-        let currF = fedCount;
-        let currChance = isChance;
-        let currInv = { ...inventory };
-        
-        while (currG < 30 && currF < 10) {
-          const res = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount, isPremium);
-          if (!res || !res.action || res.action.id === 'pass') break;
-          
-          route.push(res.action.name);
-          
-          const multiplier = currChance ? 3 : 1;
-          currG += res.action.val * multiplier;
-          
-          currF++;
-          currChance = false;
-          if (currInv[res.action.id] !== '∞') currInv[res.action.id]--;
-        }
-        return { route, finalG: currG };
-      }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, isPremium, getBestAction]);
-
-      const currentBestMove = useMemo(() => {
-        if (30 - actualGauge <= 0) return { type: '完了', id: null, prob: 1.0 };
-        const res = getBestAction(actualGauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount, isPremium);
-        if (!res || !res.action) return { type: '➔ 翌日へ (ストップ)', id: 'pass', prob: 0.0 };
-        return { type: res.action.name, id: res.action.id, prob: res.catchProb };
-      }, [actualGauge, fedCount, isChance, guaranteedCount, inventory, isPremium, getBestAction]);
-
-      // --- モンテカルロ・シミュレーション (持ち越しバグ修正版) ---
+      // 非同期計算ラッパー (UIフリーズ回避)
       useEffect(() => {
-        setSimExpectedCatches("計算中...");
         let isCancelled = false;
         
-        const startSimulation = () => {
-          if (isCancelled) return;
-          let totalCatches = 0;
-          const TRIALS = 500; 
-          const CHUNK_SIZE = 50;
-          let currentTrial = 0;
-
-          const runChunk = () => {
-            if (isCancelled) return;
-            let catches = 0;
-            for (let i = 0; i < CHUNK_SIZE; i++) {
-              let simInv = { ...inventory };
-              // ★修正箇所：進んだゲージを保持する変数を用意
-              let currentCarryGauge = actualGauge;
-
-              for (let e = 0; e < simInv.encounters; e++) {
-                let sf = (e === 0) ? fedCount : 0;
-                let sChance = (e === 0) ? isChance : Math.random() < 0.1;
-                // ★修正箇所：初日以外も、前日の持ち越しゲージを引き継ぐ
-                let simGauge = currentCarryGauge; 
-                let active = true;
-
-                // ★修正箇所：日を跨ぐごとにボーナスサブレを復活させる
-                simInv.s4 = 1;
-
-                if (simGauge >= 30) {
-                  catches++;
-                  currentCarryGauge = 0;
-                  active = false;
-                }
-
-                while (active && simGauge < 30) {
-                  const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, guaranteedCount, isPremium);
-                  if (!res || !res.action || res.action.id === 'pass') {
-                    // ストップ（パス）した場合、そこまで進んだゲージを持ち越す
-                    currentCarryGauge = simGauge;
-                    active = false;
-                    break;
-                  }
-                  const action = res.action;
-
-                  let multiplier = 1;
-                  if (sChance && sf === 0) {
-                    multiplier = Math.random() < 0.1 ? 30 : 3;
-                  } else {
-                    const r = Math.random();
-                    if (r < 0.02) multiplier = 30;
-                    else if (r < 0.10) multiplier = 3;
-                  }
-
-                  if (sf >= 3 && Math.random() < 0.4) {
-                    // 満腹になって逃げられた場合も、そこまで進んだゲージを持ち越す
-                    currentCarryGauge = simGauge;
-                    active = false; 
-                    break;
-                  }
-
-                  if (simInv[action.id] !== '∞') simInv[action.id]--;
-                  simGauge = Math.min(30, simGauge + action.val * multiplier);
-                  sf++;
-                  sChance = false;
-
-                  if (simGauge >= 30) {
-                    catches++;
-                    currentCarryGauge = 0; // 捕まえたらリセット
-                    active = false;
-                  }
-                }
-                
-                // 万が一whileを抜けてactiveなままの場合のフェイルセーフ
-                if (active) {
-                  currentCarryGauge = simGauge;
-                }
-              }
-            }
-            
-            totalCatches += catches;
-            currentTrial += CHUNK_SIZE;
-
-            if (currentTrial < TRIALS) {
-              setTimeout(runChunk, 0); 
-            } else {
-              setSimExpectedCatches((totalCatches / TRIALS).toFixed(2));
-            }
-          };
-
-          setTimeout(runChunk, 0);
-        };
-
-        const debounceTimeoutId = setTimeout(startSimulation, 300);
-        return () => { 
-          isCancelled = true; 
-          clearTimeout(debounceTimeoutId);
-        };
-      }, [inventory, getBestAction, actualGauge, fedCount, isChance, guaranteedCount, isPremium]);
-
-      const handleThrow = (multiplier) => {
-        const actId = currentBestMove.id;
-        if (!actId || actId === 'pass') return;
-
-        setHistory(prev => [...prev, {
-          gauge,
-          fedCount,
-          isChance,
-          isFull,
-          inventory: { ...inventory },
-          formData: { ...formData }
-        }]);
-
-        if (multiplier === 0) {
-          setIsFull(true);
+        if (actualGauge >= 30 || inventory.encounters <= 0) {
+          setEngineState({
+            isCalculating: false,
+            bestMove: { type: '完了', id: null, prob: 1.0 },
+            expectedTotal: "0.00",
+            routeData: { route: [], finalG: actualGauge }
+          });
           return;
         }
 
+        setEngineState(prev => ({ ...prev, isCalculating: true, bestMove: { type: '計算中...', id: null, prob: 0 } }));
+
+        setTimeout(() => {
+          if (isCancelled) return;
+          const res = getBestAction(actualGauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount, isPremium);
+          if (isCancelled) return;
+
+          // 想定ルートの構築 (満腹・大成功なし)
+          const route = [];
+          let currG = actualGauge;
+          let currF = fedCount;
+          let currChance = isChance;
+          let currInv = { ...inventory };
+          
+          while (currG < 30 && currF < 10) {
+            const stepRes = getBestAction(currG, currF, currChance, currInv, inventory.encounters, guaranteedCount, isPremium);
+            if (!stepRes || !stepRes.action || stepRes.action.id === 'pass') break;
+            
+            route.push(stepRes.action.name);
+            let val = stepRes.action.val;
+            let multiplier = currChance ? 3 : 1;
+            currG += val * multiplier;
+            currF++;
+            currChance = false;
+            if (currInv[stepRes.action.id] !== '∞') currInv[stepRes.action.id]--;
+          }
+
+          setEngineState({
+            isCalculating: false,
+            bestMove: res.action ? { type: res.action.name, id: res.action.id, prob: res.catchProb } : { type: '➔ 翌日へ (ストップ)', id: 'pass', prob: 0 },
+            expectedTotal: res.ev.toFixed(2), 
+            routeData: { route, finalG: currG }
+          });
+        }, 10);
+
+        return () => { isCancelled = true; };
+      }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, isPremium, getBestAction]);
+
+      const handleThrow = (multiplier) => {
+        const actId = engineState.bestMove.id;
+        if (!actId || actId === 'pass' || engineState.isCalculating) return;
+
+        setHistory(prev => [...prev, { gauge, fedCount, isChance, isFull, inventory: { ...inventory }, formData: { ...formData } }]);
+
+        if (multiplier === 0) { setIsFull(true); return; }
+
         let actualMultiplier = multiplier;
-        if (isChance && multiplier === 1) {
-          actualMultiplier = 3;
-        }
+        if (isChance && multiplier === 1) actualMultiplier = 3;
 
         let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? (isPremium ? 4 : 3) : actId === 's3' ? 3 : 1;
         let added = actualMultiplier === 30 ? 30 : val * actualMultiplier;
@@ -473,23 +342,13 @@
 
       const resetGaugeOnly = () => {
         if (window.confirm("フレンドポイントと食べた枚数を0にリセットしますか？")) {
-          setGauge(0);
-          setFedCount(0);
-          setIsChance(false);
-          setIsFull(false);
-          setHistory([]);
+          setGauge(0); setFedCount(0); setIsChance(false); setIsFull(false); setHistory([]);
         }
       };
 
       const resetEncounter = () => {
-        if (actualGauge >= 30) {
-          setGauge(0);
-        }
-        setFedCount(0);
-        setIsChance(false);
-        setIsFull(false);
-        setHistory([]);
-
+        if (actualGauge >= 30) setGauge(0);
+        setFedCount(0); setIsChance(false); setIsFull(false); setHistory([]);
         setInventory(prev => {
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
@@ -497,7 +356,6 @@
           next.s4 = 1; 
           return next;
         });
-
         setFormData(prev => {
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
@@ -516,41 +374,22 @@
           </header>
 
           <main className="flex-1 overflow-y-auto p-4 space-y-4">
-            
             <div className="bg-white rounded-2xl shadow-sm p-5 border-t-4 border-purple-600">
               <h2 className="text-sm font-bold text-gray-500 mb-4">実践シミュレーター</h2>
-              
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm text-gray-600 font-bold">フレンドポイント</span>
                 <div className="flex items-center gap-2">
-                  <button onClick={resetGaugeOnly} className="text-xs bg-gray-200 px-2 py-1 rounded font-bold text-gray-600 active:bg-gray-300 hover:bg-gray-300 transition-colors">
-                    リセット
-                  </button>
+                  <button onClick={resetGaugeOnly} className="text-xs bg-gray-200 px-2 py-1 rounded font-bold text-gray-600 active:bg-gray-300 hover:bg-gray-300 transition-colors">リセット</button>
                   <div className="flex items-baseline">
-                    <input 
-                      type="number"
-                      inputMode="numeric"
-                      min="0"
-                      max="30"
-                      value={gauge}
-                      onChange={(e) => {
+                    <input type="number" inputMode="numeric" min="0" max="30" value={gauge} onChange={(e) => {
                         const val = e.target.value;
-                        if (val === '') {
-                          setGauge('');
-                          setHistory([]);
-                          setIsFull(false);
-                          return;
-                        }
+                        if (val === '') { setGauge(''); setHistory([]); setIsFull(false); return; }
                         let strVal = val.replace(/^0+(?=\d)/, '');
                         let parsed = parseInt(strVal, 10);
                         if (isNaN(parsed) || parsed < 0) parsed = 0;
                         if (parsed > 30) parsed = 30;
-                        setGauge(parsed);
-                        setHistory([]);
-                        setIsFull(false);
-                      }}
-                      className="w-12 p-0 text-right font-black text-purple-700 text-2xl bg-transparent border-b-2 border-dashed border-purple-400 focus:border-solid focus:border-purple-600 focus:outline-none transition-colors"
-                    />
+                        setGauge(parsed); setHistory([]); setIsFull(false);
+                      }} className="w-12 p-0 text-right font-black text-purple-700 text-2xl bg-transparent border-b-2 border-dashed border-purple-400 focus:border-solid focus:border-purple-600 focus:outline-none transition-colors" />
                     <span className="text-2xl font-black text-purple-700 ml-1">/ 30</span>
                   </div>
                 </div>
@@ -561,42 +400,43 @@
               </div>
 
               <div className="flex gap-4 mb-4 bg-purple-50 p-3 rounded-xl border border-purple-100">
-                <label className={`flex items-center space-x-2 text-sm font-bold w-full cursor-pointer ${fedCount > 0 || actualGauge >= 30 || isFull ? 'text-gray-400 opacity-70' : 'text-purple-900'}`}>
-                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0 || actualGauge >= 30 || isFull} />
+                <label className={`flex items-center space-x-2 text-sm font-bold w-full cursor-pointer ${fedCount > 0 || actualGauge >= 30 || isFull || engineState.isCalculating ? 'text-gray-400 opacity-70' : 'text-purple-900'}`}>
+                  <input type="checkbox" checked={isChance} onChange={(e) => setIsChance(e.target.checked)} className="rounded w-5 h-5 text-purple-600 focus:ring-purple-500 border-gray-300" disabled={fedCount > 0 || actualGauge >= 30 || isFull || engineState.isCalculating} />
                   <span>チャンス状態 (1投目のみ)</span>
                 </label>
               </div>
 
               <div className="flex justify-between items-center mb-1 text-sm font-medium text-gray-700">
                 <span>確定ライン:</span>
-                <select value={guaranteedCount} onChange={(e) => setGuaranteedCount(Number(e.target.value))} className="border-gray-300 rounded shadow-sm focus:ring-purple-500 p-1 bg-gray-50" disabled={isFull}>
+                <select value={guaranteedCount} onChange={(e) => setGuaranteedCount(Number(e.target.value))} className="border-gray-300 rounded shadow-sm focus:ring-purple-500 p-1 bg-gray-50" disabled={isFull || engineState.isCalculating}>
                   <option value={3}>3枚 (通常)</option>
                   <option value={2}>2枚</option>
                 </select>
               </div>
-              
               <p className="text-xs text-gray-400 text-right mb-4">現在 {fedCount + 1} 枚目（{fedCount >= guaranteedCount ? '⚠️満腹リスクあり' : '✅確定ライン'}）</p>
 
-              <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100">
+              <div className="bg-gradient-to-b from-purple-50 to-white rounded-2xl shadow-inner p-5 text-center border border-gray-100 relative">
                 <p className="text-xs text-gray-500 font-bold mb-1">次の一手</p>
-                <p className="text-3xl font-black text-purple-900 mb-3">{isFull ? '満腹 (逃走)' : currentBestMove.type}</p>
+                <p className={`text-3xl font-black text-purple-900 mb-3 transition-opacity ${engineState.isCalculating ? 'opacity-50' : 'opacity-100'}`}>
+                  {isFull ? '満腹 (逃走)' : engineState.bestMove.type}
+                </p>
                 
-                {!isFull && currentBestMove.type !== '完了' && currentBestMove.id !== 'pass' && (
-                  <div className="mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full fade-in">
+                {!isFull && engineState.bestMove.type !== '完了' && engineState.bestMove.id !== 'pass' && (
+                  <div className={`mb-4 bg-white bg-opacity-80 rounded-lg p-3 text-sm text-gray-700 shadow-sm border border-purple-100 text-left w-full transition-opacity ${engineState.isCalculating ? 'opacity-50' : 'opacity-100'}`}>
                     <div className="flex justify-between border-b border-gray-100 pb-2 mb-2">
                       <span className="font-bold text-gray-600">この回の捕獲確率:</span>
-                      <span className="font-black text-purple-700">{(currentBestMove.prob * 100).toFixed(1)}%</span>
+                      <span className="font-black text-purple-700">{(engineState.bestMove.prob * 100).toFixed(1)}%</span>
                     </div>
                     <div>
                       <span className="font-bold text-gray-600 block mb-2 text-xs">想定ルート (大成功・満腹なし進行時):</span>
                       <div className="text-xs text-gray-600 flex flex-wrap gap-1 items-center">
-                        {expectedRouteData.route.map((step, idx) => (
+                        {engineState.routeData.route.map((step, idx) => (
                           <React.Fragment key={idx}>
                             <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded font-medium">{step}</span>
-                            {idx < expectedRouteData.route.length - 1 && <span className="text-gray-400">➔</span>}
+                            {idx < engineState.routeData.route.length - 1 && <span className="text-gray-400">➔</span>}
                           </React.Fragment>
                         ))}
-                        {expectedRouteData.finalG >= 30 ? (
+                        {engineState.routeData.finalG >= 30 ? (
                           <span className="text-green-600 font-bold ml-1">GET!</span>
                         ) : (
                           <span className="text-gray-500 font-bold ml-1 text-xs">➔ 翌日へ</span>
@@ -606,14 +446,14 @@
                   </div>
                 )}
 
-                {!isFull && currentBestMove.type !== '完了' && currentBestMove.id !== 'pass' && (
+                {!isFull && engineState.bestMove.type !== '完了' && engineState.bestMove.id !== 'pass' && (
                   <>
                     <p className="text-xs text-gray-400 mb-2">実際の結果をタップ（所持数は自動で減ります）</p>
                     <div className="grid grid-cols-2 gap-2 mb-2">
-                      <button onClick={() => handleThrow(1)} className="bg-white border border-purple-200 text-purple-700 py-3 rounded-xl font-bold active:bg-purple-100 shadow-sm transition-transform active:scale-95">通常</button>
-                      <button onClick={() => handleThrow(3)} className="bg-purple-600 text-white py-3 rounded-xl font-bold active:bg-purple-700 shadow-sm transition-transform active:scale-95">大成功 (3倍)</button>
-                      <button onClick={() => handleThrow(30)} className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-3 rounded-xl font-bold active:opacity-80 shadow-sm transition-transform active:scale-95">超成功 (一発)</button>
-                      <button onClick={() => handleThrow(0)} className="bg-gray-400 text-white py-3 rounded-xl font-bold active:bg-gray-500 shadow-sm transition-transform active:scale-95">満腹 (逃走)</button>
+                      <button onClick={() => handleThrow(1)} disabled={engineState.isCalculating} className={`bg-white border border-purple-200 text-purple-700 py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-purple-100 active:scale-95'}`}>通常</button>
+                      <button onClick={() => handleThrow(3)} disabled={engineState.isCalculating} className={`bg-purple-600 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-purple-700 active:scale-95'}`}>大成功 (3倍)</button>
+                      <button onClick={() => handleThrow(30)} disabled={engineState.isCalculating} className={`bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:opacity-80 active:scale-95'}`}>超成功 (一発)</button>
+                      <button onClick={() => handleThrow(0)} disabled={engineState.isCalculating} className={`bg-gray-400 text-white py-3 rounded-xl font-bold shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-gray-500 active:scale-95'}`}>満腹 (逃走)</button>
                     </div>
                   </>
                 )}
@@ -625,21 +465,21 @@
                   </div>
                 )}
 
-                {!isFull && currentBestMove.id === 'pass' && (
-                  <div className="mb-4 bg-purple-50 rounded-lg p-4 text-sm text-purple-900 shadow-sm border border-purple-200 text-center fade-in">
+                {!isFull && engineState.bestMove.id === 'pass' && (
+                  <div className={`mb-4 bg-purple-50 rounded-lg p-4 text-sm text-purple-900 shadow-sm border border-purple-200 text-center transition-opacity ${engineState.isCalculating ? 'opacity-50' : 'opacity-100'}`}>
                     <p className="font-black mb-1 text-lg">今日はここでストップ！</p>
                     <p className="text-xs font-bold">無理をして投げるより、翌日に回す方がお得です。<br/>「次の出会いへ進む」を押してください。</p>
                   </div>
                 )}
                 
                 {history.length > 0 && (
-                  <button onClick={undoMove} className="w-full mt-2 py-3 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 hover:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
+                  <button onClick={undoMove} disabled={engineState.isCalculating} className={`w-full mt-2 py-3 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-1 ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-gray-300 hover:bg-gray-300'}`}>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                     1手戻る (誤タップ修正)
                   </button>
                 )}
               </div>
-              <button onClick={resetEncounter} className="w-full mt-4 py-4 bg-purple-100 text-purple-700 font-black text-sm rounded-xl active:bg-purple-200 hover:bg-purple-200 transition-colors shadow-sm">次の出会いへ進む (残り回数-1)</button>
+              <button onClick={resetEncounter} disabled={engineState.isCalculating} className={`w-full mt-4 py-4 bg-purple-100 text-purple-700 font-black text-sm rounded-xl shadow-sm transition-all ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'active:bg-purple-200 hover:bg-purple-200'}`}>次の出会いへ進む (残り回数-1)</button>
             </div>
 
             <div className="bg-white rounded-2xl shadow-sm p-5 flex items-center justify-between">
@@ -647,8 +487,8 @@
                 <h2 className="text-sm font-bold text-gray-800">イベント完走予測</h2>
                 <p className="text-xs text-gray-400">適用中の在庫・回数による期待値</p>
               </div>
-              <div className="text-right">
-                <span className="text-2xl font-black text-purple-700">{simExpectedCatches}</span>
+              <div className={`text-right transition-opacity ${engineState.isCalculating ? 'opacity-50' : 'opacity-100'}`}>
+                <span className="text-2xl font-black text-purple-700">{engineState.expectedTotal}</span>
                 <span className="text-sm text-gray-500 ml-1">体</span>
               </div>
             </div>
@@ -656,18 +496,9 @@
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-sm font-bold text-gray-800">サブレ所持数・設定</h2>
-                
                 <label className="flex items-center cursor-pointer">
                   <div className="relative">
-                    <input 
-                      type="checkbox" 
-                      className="sr-only" 
-                      checked={isPremium} 
-                      onChange={(e) => {
-                        setIsPremium(e.target.checked);
-                        globalDpMemo.clear(); 
-                      }} 
-                    />
+                    <input type="checkbox" className="sr-only" checked={isPremium} onChange={(e) => { setIsPremium(e.target.checked); globalDpMemo.clear(); }} disabled={engineState.isCalculating} />
                     <div className={`block w-10 h-6 rounded-full transition-colors ${isPremium ? 'bg-purple-500' : 'bg-gray-300'}`}></div>
                     <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${isPremium ? 'transform translate-x-4' : ''}`}></div>
                   </div>
@@ -686,7 +517,7 @@
 
               {isModified && (
                 <div className="mt-5 fade-in">
-                  <button onClick={applySettings} className="w-full bg-purple-600 text-white py-3 rounded-xl font-bold shadow-md hover:bg-purple-700 active:scale-95 transition-transform text-lg">
+                  <button onClick={applySettings} disabled={engineState.isCalculating} className={`w-full bg-purple-600 text-white py-3 rounded-xl font-bold shadow-md transition-all text-lg ${engineState.isCalculating ? 'opacity-50 cursor-wait' : 'hover:bg-purple-700 active:scale-95'}`}>
                     設定を適用して再計算
                   </button>
                 </div>
