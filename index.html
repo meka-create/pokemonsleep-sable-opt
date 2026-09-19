@@ -704,29 +704,35 @@
               const bestIsPdf = pdfPreferredAi >= 0 && bestAction === pdfPreferredAi;
               let betterTie;
               if (currentKeepsGuarantee !== bestKeepsGuarantee) {
+                // 16〜18の温存比較では、まず記事どおり100%取り切り維持を最優先。
                 betterTie = currentKeepsGuarantee;
-              } else if (currentIsPdf !== bestIsPdf) {
-                betterTie = currentIsPdf;
               } else {
-                // PDFは「同じ組み合わせなら基本は小さい数字から」としつつ、
-                // ボーナスサブレ等は節約したい在庫と数字順が一致しない例外としている。
-                // ただし今回の例外は、プレミアム時の「ボーナス+(4) vs スーパー(3)」だけに限定する。
-                // イベント全体期待値に加えて“この遭遇の捕獲確率”まで同値なら、4を先に消化する。
                 const bestA = actions[bestAction];
+                // プレミアム時の「ボーナス+(4) vs スーパー(3)」だけは特別扱い。
+                // イベント全体期待値と“この遭遇の捕獲確率”まで同値なら、
+                // PDF表の初手指定より上位でボーナス+(4)を先に消化する。
+                // これにより大成功時に有限のスーパー(3)等を温存しやすくする。
                 const isPremiumBonusVsSuper = ctx.premium && (
                   (a.id === 's4' && bestA.id === 's3') ||
                   (a.id === 's3' && bestA.id === 's4')
                 );
+                let decidedByBonus4 = false;
                 if (isPremiumBonusVsSuper) {
                   const currentCatch = forcedActionCatchProb(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
                   const bestCatch = forcedActionCatchProb(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce);
                   if (Math.abs(currentCatch - bestCatch) <= 1e-12) {
                     betterTie = a.id === 's4';
+                    decidedByBonus4 = true;
+                  }
+                }
+
+                if (!decidedByBonus4) {
+                  if (currentIsPdf !== bestIsPdf) {
+                    betterTie = currentIsPdf;
                   } else {
+                    // 通常の同値時はPDF表→小さい数字順。
                     betterTie = tieRank(a) < tieRank(bestA);
                   }
-                } else {
-                  betterTie = tieRank(a) < tieRank(bestA);
                 }
               }
               if (betterTie) {
