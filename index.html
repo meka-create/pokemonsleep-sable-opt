@@ -73,23 +73,22 @@
 
       // --- 動的計画法（DP）コアエンジン ---
       const getBestAction = useCallback((g, f, chance, inv, enc, guar) => {
-        const CATCH_REWARD = 1000; // 捕獲の絶対的価値
-        const GAUGE_VALUE = 15;    // 1ゲージあたりの持ち越し価値
+        const CATCH_REWARD = 2000; 
+        const GAUGE_VALUE = 20;    
 
         if (g >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
         if (f >= 6) return { ev: g * GAUGE_VALUE, catchProb: 0.0, action: null };
 
-        // 資料に基づくミュウツーサブレ(6)の相対価値の動的変動
         const isHyper = inv.s5 > 0 || (inv.s3 !== '∞' && inv.s3 > 0);
         const surplusThreshold = isHyper ? enc + 3 : enc * 2;
         const isS6Surplus = inv.s6 !== '∞' && inv.s6 >= surplusThreshold;
         const isLastDay = enc <= 1;
         
-        let cost6 = 180; // 基本は温存するため非常に重いコストを設定
-        if (isLastDay) cost6 = 0; // 最終日は惜しまず使う
-        else if (isS6Surplus) cost6 = 70; // 余っている場合はハイパーより優先させる
+        let cost6 = 200; 
+        if (isLastDay) cost6 = 10; 
+        else if (isS6Surplus) cost6 = 80; 
 
-        const costs = { s6: cost6, s5: 80, s4: 0, s3: 40, s1: 10 };
+        const costs = { s6: cost6, s5: 50, s4: 0, s3: 30, s1: 10 };
         const sables = [
           { id: 's6', val: 6, name: 'ミュウツー(6)' },
           { id: 's5', val: 5, name: 'ハイパー(5)' },
@@ -111,10 +110,17 @@
           let bestAct = null;
           let bestProb = 0;
 
-          const fullRiskRate = (cf + 1 >= guar) ? 0.4 : 0.0;
-          const eatNextRate = 1.0 - fullRiskRate;
+          // PDFの「4枚目以降は毎回60%で食べる」を正確に反映
+          const currentEatProb = (cf >= guar) ? 0.6 : 1.0;
+          const currentRejectProb = 1.0 - currentEatProb;
+          const rejectEv = cg * GAUGE_VALUE; 
+
+          const currentRemaining = 30 - cg;
+          const canUseS6 = cChance || isLastDay || isS6Surplus || currentRemaining <= 18;
 
           for (const sable of sables) {
+            if (sable.id === 's6' && !canUseS6) continue;
+
             const count = cInv[sable.id];
             if (count !== '∞' && count <= 0) continue;
 
@@ -125,26 +131,28 @@
             let expectedValue = 0;
             let expectedCatchProb = 0;
 
-            const evaluateOutcomeEv = (nextG) => {
+            const evaluateEatEv = (nextG) => {
               if (nextG >= 30) return CATCH_REWARD;
-              const nextState = calcDP(nextG, cf + 1, false, nextInv);
-              return (eatNextRate * nextState.ev) + (fullRiskRate * (nextG * GAUGE_VALUE));
+              return calcDP(nextG, cf + 1, false, nextInv).ev;
             };
-            const evaluateOutcomeProb = (nextG) => {
+            const evaluateEatProb = (nextG) => {
               if (nextG >= 30) return 1.0;
-              const nextState = calcDP(nextG, cf + 1, false, nextInv);
-              return eatNextRate * nextState.catchProb;
+              return calcDP(nextG, cf + 1, false, nextInv).catchProb;
             };
 
             if (cChance) {
               const valBig = Math.min(30, cg + sable.val * 3);
-              expectedValue = (0.9 * evaluateOutcomeEv(valBig)) + (0.1 * CATCH_REWARD) - cost;
-              expectedCatchProb = (0.9 * evaluateOutcomeProb(valBig)) + (0.1 * 1.0);
+              const eatEv = (0.9 * evaluateEatEv(valBig)) + (0.1 * CATCH_REWARD) - cost;
+              const eatProb = (0.9 * evaluateEatProb(valBig)) + 0.1;
+              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * rejectEv);
+              expectedCatchProb = currentEatProb * eatProb;
             } else {
               const valNorm = Math.min(30, cg + sable.val);
               const valBig = Math.min(30, cg + sable.val * 3);
-              expectedValue = (0.9 * evaluateOutcomeEv(valNorm)) + (0.08 * evaluateOutcomeEv(valBig)) + (0.02 * CATCH_REWARD) - cost;
-              expectedCatchProb = (0.9 * evaluateOutcomeProb(valNorm)) + (0.08 * evaluateOutcomeProb(valBig)) + (0.02 * 1.0);
+              const eatEv = (0.9 * evaluateEatEv(valNorm)) + (0.08 * evaluateEatEv(valBig)) + (0.02 * CATCH_REWARD) - cost;
+              const eatProb = (0.9 * evaluateEatProb(valNorm)) + (0.08 * evaluateEatProb(valBig)) + 0.02;
+              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * rejectEv);
+              expectedCatchProb = currentEatProb * eatProb;
             }
 
             if (expectedValue > bestVal) {
@@ -208,8 +216,6 @@
               if (!res || !res.action) break;
               const action = res.action;
 
-              if (simInv[action.id] !== '∞') simInv[action.id]--;
-
               let multiplier = 1;
               if (sChance && sf === 0) {
                 multiplier = Math.random() < 0.1 ? 30 : 3;
@@ -219,6 +225,16 @@
                 else if (r < 0.10) multiplier = 3;
               }
 
+              // 満腹判定（食べるかどうかの判定を先に行う）
+              if (sf >= 3 && Math.random() < 0.4) {
+                active = false; 
+                // 食べなかったので消費しない
+                break;
+              }
+
+              // 食べたので消費する
+              if (simInv[action.id] !== '∞') simInv[action.id]--;
+
               simGauge = Math.min(30, simGauge + action.val * multiplier);
               sf++;
               sChance = false;
@@ -227,8 +243,6 @@
                 catches++;
                 simGauge = 0; 
                 active = false;
-              } else {
-                if (sf >= 3 && Math.random() < 0.4) active = false; 
               }
             }
           }
@@ -262,7 +276,6 @@
       };
 
       const resetEncounter = () => {
-        // バグ修正: 捕獲済みの場合はゲージをリセットする
         if (gauge >= 30) {
           setGauge(0);
         }
@@ -301,7 +314,7 @@
                 onClick={() => handleFormChange(id, formData[id] === '∞' ? '0' : '∞')} 
                 className="px-2 bg-purple-100 text-purple-700 rounded text-xs font-bold active:bg-purple-200"
               >
-                ∞切替
+                ∞
               </button>
             )}
           </div>
