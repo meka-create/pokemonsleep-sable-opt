@@ -555,12 +555,13 @@
             return cg + a.val * guaranteedMult >= TARGET;
           });
 
-        // X記事は3タイプを固定せず手持ちに応じて行き来する前提なので、
-        // 残り16〜18ではタイプを問わず「今100%で取り切る」対「高価な在庫を温存する」
-        // をDPで直接比較する。最終遭遇と、最後の確定1投だけで捕獲できる場合は
-        // 記事どおり取り切りを優先する。
+        // X記事で残り16〜18の温存例外が明示されているのはポケ中心寄り。
+        // 3タイプ自体は手持ちに応じて行き来するため、固定在庫名ではなく strategyType() の
+        // 柔軟な判定が 'poke' の時だけ「今100%で取り切る」対「6を温存する」をDP比較する。
+        // ハイパー／スーパー中心では記事の共通ルールどおり保証内の確定捕獲を優先する。
         const allowEarlyPreserveComparison = pdfStandardMode
           && guaranteedFinish
+          && type === 'poke'
           && normalNonChance
           && remainingGauge >= 16
           && remainingGauge <= 18
