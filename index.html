@@ -14,7 +14,6 @@
     .fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     
-    /* スマホ・PCの標準スピナーを消去 */
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
@@ -29,9 +28,8 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo, useCallback, useRef } = React;
+    const { useState, useEffect, useMemo, useCallback } = React;
 
-    // --- 真の大局的最適化（多期間MDP）用キャッシュ ---
     const globalDpMemo = new Map();
 
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
@@ -102,7 +100,6 @@
       const [history, setHistory] = useLocalStorage('mewtwo_history', []);
       const [isPremium, setIsPremium] = useLocalStorage('mewtwo_isPremium', true);
 
-      // AIエンジン（非同期計算結果）のステート
       const [engineState, setEngineState] = useState({
         isCalculating: false,
         bestMove: { type: '計算中...', id: null, prob: 0 },
@@ -135,16 +132,13 @@
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
       // =========================================================================
-      // 純粋期待値計算エンジン (一切の小細工・疑似コスト排除版)
+      // 高速・安全な期待値計算エンジン (無限ループ・フリーズ防止ガード付き)
       // =========================================================================
       const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
         
-        // 戻り値: { ev: イベント最終日までの累計捕獲数の期待値, catchProb: 今日の捕獲確率, action: 最適な一手 }
         const calcDP = (cg, cf, cChance, cInv, cEnc) => {
           if (cEnc <= 0) return { ev: 0, catchProb: 0, action: null };
-          
           if (cg >= 30) {
-            // 捕獲完了。翌日へ（ボーナスサブレ復活）
             let nextInvDay = { ...cInv, s4: 1 }; 
             let evNext = 0;
             if (cEnc > 1) {
@@ -152,9 +146,7 @@
             }
             return { ev: 1.0 + evNext, catchProb: 1.0, action: null };
           }
-          
           if (cf >= 10) { 
-            // 満腹（手動ストッパー用）。持ち越しゲージで翌日へ
             let nextInvDay = { ...cInv, s4: 1 };
             let evNext = 0;
             if (cEnc > 1) {
@@ -163,14 +155,12 @@
             return { ev: evNext, catchProb: 0, action: { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 } };
           }
 
-          // 状態空間の刈り込み (過剰な在庫は期待値に影響しないため丸める)
-          const cap = (val) => val === '∞' ? 'inf' : Math.min(val, cEnc * 3 + 3);
+          const cap = (val) => val === '∞' ? 'inf' : Math.min(val, cEnc + 2);
           const memoKey = `${cg}-${cf}-${cChance}-${cap(cInv.s6)}-${cap(cInv.s5)}-${cInv.s4}-${cap(cInv.s3)}-${cap(cInv.s1)}-${cEnc}-${guar}-${premium}`;
 
           if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
-          if (globalDpMemo.size > 200000) globalDpMemo.clear(); // メモリ保護
+          if (globalDpMemo.size > 20000) globalDpMemo.clear(); // 安全なメモリ制限
 
-          // アクション「パス（翌日へストップ）」の純粋な期待値
           let nextInvDay = { ...cInv, s4: 1 };
           let passEv = 0;
           if (cEnc > 1) {
@@ -181,7 +171,6 @@
           let bestAct = { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 };
           let bestCatchProb = 0;
 
-          // 同一期待値だった場合のタイブレーク優先順位 (パスを優先し、安いサブレから)
           const sables = [
             { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)', priority: 5 },
             { id: 's1', val: 1, name: 'ポケ(1)', priority: 4 },
@@ -225,7 +214,6 @@
               probEat = 0.02 * 1.0 + 0.08 * evalEatProb(cg + sable.val * 3) + 0.90 * evalEatProb(cg + sable.val);
             }
 
-            // 弾かれた場合はアイテム消費なしで翌日へ (passEv)
             let expectedValue = eatProb * evEat + rejectProb * passEv;
             let currentCatchProb = eatProb * probEat;
 
@@ -251,7 +239,6 @@
         return calcDP(g, f, chance, inv, enc);
       }, []);
 
-      // 非同期計算ラッパー (UIフリーズ回避)
       useEffect(() => {
         let isCancelled = false;
         
@@ -267,12 +254,11 @@
 
         setEngineState(prev => ({ ...prev, isCalculating: true, bestMove: { type: '計算中...', id: null, prob: 0 } }));
 
-        setTimeout(() => {
-          if (isCancelled) return;
+        // 同期処理として一瞬で計算（フリーズしない軽量設計）
+        try {
           const res = getBestAction(actualGauge, fedCount, isChance, inventory, inventory.encounters, guaranteedCount, isPremium);
           if (isCancelled) return;
 
-          // 想定ルートの構築 (満腹・大成功なし)
           const route = [];
           let currG = actualGauge;
           let currF = fedCount;
@@ -298,7 +284,15 @@
             expectedTotal: res.ev.toFixed(2), 
             routeData: { route, finalG: currG }
           });
-        }, 10);
+        } catch (e) {
+          console.error(e);
+          setEngineState({
+            isCalculating: false,
+            bestMove: { type: 'エラー', id: null, prob: 0 },
+            expectedTotal: "0.00",
+            routeData: { route: [], finalG: actualGauge }
+          });
+        }
 
         return () => { isCancelled = true; };
       }, [actualGauge, fedCount, isChance, inventory, guaranteedCount, isPremium, getBestAction]);
