@@ -14,7 +14,7 @@
     .fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     
-    /* スマホ・PCの標準スピナー（上下矢印）を消去してカスタムデザインを適用するため */
+    /* スマホ・PCの標準スピナーを消去 */
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
@@ -58,8 +58,6 @@
         <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2 items-center">
-            
-            {/* 左側：∞ボタンの配置スペース（無い場合も縦を揃えるため固定幅w-8を確保） */}
             <div className="w-8 flex justify-center">
               {hasInfinity && (
                 <button 
@@ -70,8 +68,6 @@
                 </button>
               )}
             </div>
-            
-            {/* 右側：独立した[－] [数値] [＋] の横並びデザイン */}
             <div className="flex gap-1 items-center">
               <button 
                 onClick={handleDown} 
@@ -80,7 +76,6 @@
               >
                 −
               </button>
-              
               <input 
                 type={isInf ? "text" : "number"}
                 inputMode={isInf ? "text" : "numeric"}
@@ -91,7 +86,6 @@
                 onChange={(e) => onChange(id, e.target.value)} 
                 className="w-12 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white"
               />
-              
               <button 
                 onClick={handleUp} 
                 disabled={isUpDisabled} 
@@ -100,13 +94,12 @@
                 ＋
               </button>
             </div>
-            
           </div>
         </div>
       );
     });
 
-    // --- メインアプリケーション ---
+    // --- LocalStorage カスタムフック ---
     function useLocalStorage(key, initialValue) {
       const [storedValue, setStoredValue] = useState(() => {
         try {
@@ -129,7 +122,7 @@
     }
 
     const App = () => {
-      // 全ての状態をLocalStorageで管理
+      // 状態管理
       const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
         s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
       });
@@ -141,11 +134,10 @@
       const [guaranteedCount, setGuaranteedCount] = useLocalStorage('mewtwo_guaranteedCount', 3);
       const [isFull, setIsFull] = useLocalStorage('mewtwo_isFull', false);
       const [history, setHistory] = useLocalStorage('mewtwo_history', []);
-      const [isPremium, setIsPremium] = useLocalStorage('mewtwo_isPremium', true); // プレパスON/OFF設定
-      
+      const [isPremium, setIsPremium] = useLocalStorage('mewtwo_isPremium', true);
+
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
 
-      // 入力中の空文字を許容しつつ、計算時は0として扱うための変数
       const actualGauge = gauge === '' ? 0 : gauge;
 
       const handleFormChange = useCallback((id, value) => {
@@ -157,16 +149,10 @@
           setFormData(prev => ({ ...prev, [id]: '' }));
           return;
         }
-        
         let strVal = value.toString().replace(/^0+(?=\d)/, '');
         let parsed = parseInt(strVal, 10);
         if (isNaN(parsed) || parsed < 0) parsed = 0;
-        
-        if (id === 's4' && parsed > 1) {
-          parsed = 1;
-          strVal = '1';
-        }
-        
+        if (id === 's4' && parsed > 1) { parsed = 1; strVal = '1'; }
         setFormData(prev => ({ ...prev, [id]: strVal === '' ? '' : parsed }));
       }, []);
 
@@ -177,13 +163,14 @@
         });
         setInventory(cleanedData);
         setFormData(cleanedData);
-        
         globalDpMemo.clear(); 
       };
 
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
-      // --- 動的計画法（DP）コアエンジン ---
+      // =========================================================================
+      // ダイナミック・プライシング最適化エンジン (フリーズしない超速DP)
+      // =========================================================================
       const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
         const CATCH_REWARD = 2000; 
         const GAUGE_VALUE = 20;    
@@ -192,29 +179,36 @@
           if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
           if (cf >= 10) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
 
-          // キャッシュのキーにプレパス設定(premium)を追加し、ON/OFFで計算結果が混ざらないようにする
           const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}-${premium}`;
           if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
 
+          // メモリ保護
           if (globalDpMemo.size > 50000) globalDpMemo.clear();
+
+          // --- PDFの「例外ルール」に基づくダイナミック・コストの算出 ---
+          let cost6 = 200; 
+          let priority6 = 1;
 
           const isHyper = cInv.s5 > 0 || (cInv.s3 !== '∞' && cInv.s3 > 0);
           const surplusThreshold = isHyper ? cEnc + 3 : cEnc * 2;
-          const isS6Surplus = cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold;
-          const isLastDay = cEnc <= 1;
           
-          let cost6 = 200; 
-          if (isLastDay) cost6 = 10; 
-          else if (isS6Surplus) cost6 = 80; 
+          const isException1 = (cEnc <= 1); // 最終日
+          const isException2 = (cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold); // 6が余りそう
+          const isException3 = (cf === guar - 1 && cg < 30); // 確実に食べるのが残り1枚
+
+          // 例外時は6を「無料のボーナスサブレ」よりも安く設定し、強引に最優先させる
+          if (isException1 || isException2 || isException3) {
+            cost6 = -10; 
+            priority6 = 10;
+          }
 
           const costs = { s6: cost6, s5: 50, s4: 0, s3: 30, s1: 10 };
           const sables = [
-            { id: 's6', val: 6, name: 'ミュウツー(6)' },
-            { id: 's5', val: 5, name: 'ハイパー(5)' },
-            // プレパス状態によってボーナスサブレの回復量と名前を動的に変更
-            { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)' },
-            { id: 's3', val: 3, name: 'スーパー(3)' },
-            { id: 's1', val: 1, name: 'ポケ(1)' }
+            { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)', priority: 5 },
+            { id: 's1', val: 1, name: 'ポケ(1)', priority: 4 },
+            { id: 's3', val: 3, name: 'スーパー(3)', priority: 3 },
+            { id: 's5', val: 5, name: 'ハイパー(5)', priority: 2 },
+            { id: 's6', val: 6, name: 'ミュウツー(6)', priority: priority6 }
           ];
 
           let bestVal = -Infinity;
@@ -233,12 +227,7 @@
           const currentRejectProb = 1.0 - currentEatProb;
           const rejectEv = cg * GAUGE_VALUE; 
 
-          const currentRemaining = 30 - cg;
-          const canUseS6 = cChance || isLastDay || isS6Surplus || currentRemaining <= 18;
-
           for (const sable of sables) {
-            if (sable.id === 's6' && !canUseS6) continue;
-
             const count = cInv[sable.id];
             if (count !== '∞' && count <= 0) continue;
 
@@ -273,10 +262,18 @@
               expectedCatchProb = currentEatProb * eatProb;
             }
 
-            if (expectedValue > bestVal) {
+            // 期待値が全く同じ場合は、priorityの高い（安い）サブレを優先
+            if (expectedValue > bestVal + 1e-6) {
               bestVal = expectedValue;
               bestAct = sable;
               bestProb = expectedCatchProb;
+            } else if (Math.abs(expectedValue - bestVal) <= 1e-6) {
+              const currentPriority = bestAct.id === 'pass' ? -1 : bestAct.priority;
+              if (sable.priority > currentPriority) {
+                bestVal = expectedValue;
+                bestAct = sable;
+                bestProb = expectedCatchProb;
+              }
             }
           }
           const res = { ev: bestVal, catchProb: bestProb, action: bestAct };
@@ -287,6 +284,7 @@
         return calcDP(g, f, chance, inv, enc);
       }, []);
 
+      // フリーズしないため即時同期計算に戻す（1-day DPなので一瞬で終わる）
       const expectedRouteData = useMemo(() => {
         const route = [];
         let currG = actualGauge;
@@ -317,15 +315,13 @@
         return { type: res.action.name, id: res.action.id, prob: res.catchProb };
       }, [actualGauge, fedCount, isChance, guaranteedCount, inventory, isPremium, getBestAction]);
 
-      // --- モンテカルロ・シミュレーション (入力されたゲージと枚数を反映して計算) ---
+      // --- モンテカルロ・シミュレーション (完走予測だけは非同期で回す) ---
       useEffect(() => {
         setSimExpectedCatches("計算中...");
-        
         let isCancelled = false;
         
         const startSimulation = () => {
           if (isCancelled) return;
-          
           let totalCatches = 0;
           const TRIALS = 500; 
           const CHUNK_SIZE = 50;
@@ -333,11 +329,9 @@
 
           const runChunk = () => {
             if (isCancelled) return;
-            
             let catches = 0;
             for (let i = 0; i < CHUNK_SIZE; i++) {
               let simInv = { ...inventory };
-
               for (let e = 0; e < simInv.encounters; e++) {
                 let sf = (e === 0) ? fedCount : 0;
                 let sChance = (e === 0) ? isChance : Math.random() < 0.1;
@@ -350,7 +344,6 @@
                 }
 
                 while (active && simGauge < 30) {
-                  // モンテカルロ内でも isPremium の設定を引き継ぐ
                   const res = getBestAction(simGauge, sf, sChance, simInv, simInv.encounters - e, guaranteedCount, isPremium);
                   if (!res || !res.action || res.action.id === 'pass') break;
                   const action = res.action;
@@ -370,7 +363,6 @@
                   }
 
                   if (simInv[action.id] !== '∞') simInv[action.id]--;
-
                   simGauge = Math.min(30, simGauge + action.val * multiplier);
                   sf++;
                   sChance = false;
@@ -398,7 +390,6 @@
         };
 
         const debounceTimeoutId = setTimeout(startSimulation, 300);
-
         return () => { 
           isCancelled = true; 
           clearTimeout(debounceTimeoutId);
@@ -429,7 +420,6 @@
           actualMultiplier = 3;
         }
 
-        // isPremiumの状態に応じてボーナスサブレの加算値を動的に切り替え
         let val = actId === 's6' ? 6 : actId === 's5' ? 5 : actId === 's4' ? (isPremium ? 4 : 3) : actId === 's3' ? 3 : 1;
         let added = actualMultiplier === 30 ? 30 : val * actualMultiplier;
 
@@ -642,7 +632,6 @@
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-sm font-bold text-gray-800">サブレ所持数・設定</h2>
                 
-                {/* プレパス切り替えトグルスイッチ */}
                 <label className="flex items-center cursor-pointer">
                   <div className="relative">
                     <input 
@@ -664,10 +653,7 @@
               <div className="space-y-3">
                 <InputRow id="s6" label="ミュウツーサブレ (6)" hasInfinity={false} value={formData.s6} onChange={handleFormChange} />
                 <InputRow id="s5" label="ハイパーサブレ (5)" hasInfinity={false} value={formData.s5} onChange={handleFormChange} />
-                
-                {/* プレパスのON/OFFでラベルを動的に切り替え */}
                 <InputRow id="s4" label={isPremium ? "ボーナスサブレ+ (4)" : "ボーナスサブレ (3)"} hasInfinity={false} value={formData.s4} onChange={handleFormChange} max={1} />
-                
                 <InputRow id="s3" label="スーパーサブレ (3)" hasInfinity={true} value={formData.s3} onChange={handleFormChange} />
                 <InputRow id="s1" label="ポケサブレ (1)" hasInfinity={true} value={formData.s1} onChange={handleFormChange} />
                 <InputRow id="encounters" label="残り出会い回数" hasInfinity={false} value={formData.encounters} onChange={handleFormChange} />
