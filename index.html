@@ -129,19 +129,20 @@
     }
 
     const App = () => {
+      // 在庫情報だけでなく、進行状況（ゲージ、食べた枚数、履歴など）も全てLocalStorageで管理
       const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
         s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
       });
       const [formData, setFormData] = useState(inventory);
       
-      const [gauge, setGauge] = useState(0);
-      const [isChance, setIsChance] = useState(false);
-      const [fedCount, setFedCount] = useState(0);
-      const [guaranteedCount, setGuaranteedCount] = useState(3);
-      const [isFull, setIsFull] = useState(false);
-      const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
+      const [gauge, setGauge] = useLocalStorage('mewtwo_gauge', 0);
+      const [isChance, setIsChance] = useLocalStorage('mewtwo_isChance', false);
+      const [fedCount, setFedCount] = useLocalStorage('mewtwo_fedCount', 0);
+      const [guaranteedCount, setGuaranteedCount] = useLocalStorage('mewtwo_guaranteedCount', 3);
+      const [isFull, setIsFull] = useLocalStorage('mewtwo_isFull', false);
+      const [history, setHistory] = useLocalStorage('mewtwo_history', []);
       
-      const [history, setHistory] = useState([]);
+      const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
 
       // 入力中の空文字を許容しつつ、計算時は0として扱うための変数
       const actualGauge = gauge === '' ? 0 : gauge;
