@@ -57,17 +57,29 @@
       
       const [history, setHistory] = useState([]);
 
+      // 入力ハンドラ（空文字の許容とフォーカス外れ対策）
       const handleFormChange = (id, value) => {
-        let parsed = value;
-        if (value !== '∞') {
-          parsed = parseInt(value, 10);
-          if (isNaN(parsed) || parsed < 0) parsed = 0;
+        if (value === '∞') {
+          setFormData(prev => ({ ...prev, [id]: '∞' }));
+          return;
         }
+        if (value === '') {
+          setFormData(prev => ({ ...prev, [id]: '' }));
+          return;
+        }
+        let parsed = parseInt(value, 10);
+        if (isNaN(parsed) || parsed < 0) parsed = 0;
         setFormData(prev => ({ ...prev, [id]: parsed }));
       };
 
       const applySettings = () => {
-        setInventory(formData);
+        // 適用時に空文字を0に変換
+        const cleanedData = { ...formData };
+        ['s6', 's5', 's4', 's3', 's1', 'encounters'].forEach(key => {
+          if (cleanedData[key] === '') cleanedData[key] = 0;
+        });
+        setInventory(cleanedData);
+        setFormData(cleanedData);
       };
 
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
@@ -182,7 +194,6 @@
           
           route.push(res.action.name);
           
-          // チャンス時は1投目が必ず大成功(3倍)になる仕様をルート計算に反映
           const multiplier = currChance ? 3 : 1;
           currG += res.action.val * multiplier;
           
@@ -262,7 +273,6 @@
         const actId = currentBestMove.id;
         if (!actId) return;
 
-        // チャンス時の「通常」タップを「大成功(3倍)」に強制上書き
         let actualMultiplier = multiplier;
         if (isChance && multiplier === 1) {
           actualMultiplier = 3;
@@ -320,51 +330,73 @@
 
         setInventory(prev => {
           const next = { ...prev };
-          if (next.encounters > 0) next.encounters -= 1;
+          const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
+          if (curr > 0) next.encounters = curr - 1;
           next.s4 = 1; 
           return next;
         });
 
         setFormData(prev => {
           const next = { ...prev };
-          if (next.encounters > 0) next.encounters -= 1;
+          const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
+          if (curr > 0) next.encounters = curr - 1;
           next.s4 = 1; 
           return next;
         });
       };
 
       // --- UI Components ---
-      const InputRow = ({ id, label, hasInfinity }) => (
-        <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
-          <span className="text-sm font-medium text-gray-700">{label}</span>
-          <div className="flex gap-2">
-            {formData[id] === '∞' ? (
-              <input 
-                type="text" 
-                value="∞" 
-                readOnly 
-                className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 bg-white outline-none"
-              />
-            ) : (
-              <input 
-                type="number" 
-                min="0"
-                value={formData[id]} 
-                onChange={(e) => handleFormChange(id, e.target.value)} 
-                className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none"
-              />
-            )}
-            {hasInfinity && (
+      // コンポーネントの再マウントによるフォーカス外れを防ぐため、通常の関数として要素を返却
+      const renderInputRow = (id, label, hasInfinity) => {
+        const val = formData[id];
+        const isInf = val === '∞';
+        return (
+          <div key={id} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
+            <span className="text-sm font-medium text-gray-700">{label}</span>
+            <div className="flex gap-1 items-center">
               <button 
-                onClick={() => handleFormChange(id, formData[id] === '∞' ? '0' : '∞')} 
-                className="px-2 bg-purple-100 text-purple-700 rounded text-xs font-bold active:bg-purple-200"
+                onClick={() => {
+                  if (isInf) return;
+                  const curr = val === '' ? 0 : parseInt(val, 10);
+                  handleFormChange(id, Math.max(0, curr - 1));
+                }}
+                disabled={isInf}
+                className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isInf ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300'}`}
               >
-                ∞
+                −
               </button>
-            )}
+              <input 
+                type={isInf ? "text" : "number"}
+                inputMode={isInf ? "text" : "numeric"}
+                min="0"
+                value={val} 
+                readOnly={isInf}
+                onChange={(e) => handleFormChange(id, e.target.value)} 
+                className="w-12 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white"
+              />
+              <button 
+                onClick={() => {
+                  if (isInf) return;
+                  const curr = val === '' ? 0 : parseInt(val, 10);
+                  handleFormChange(id, curr + 1);
+                }}
+                disabled={isInf}
+                className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isInf ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300'}`}
+              >
+                ＋
+              </button>
+              {hasInfinity && (
+                <button 
+                  onClick={() => handleFormChange(id, isInf ? '0' : '∞')} 
+                  className="px-2 ml-1 bg-purple-100 text-purple-700 rounded text-xs font-bold active:bg-purple-200 hover:bg-purple-200 transition-colors h-8"
+                >
+                  ∞
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      );
+        );
+      };
 
       return (
         <div className="min-h-screen max-w-md mx-auto bg-gray-200 flex flex-col pb-10">
@@ -449,7 +481,7 @@
                     </div>
                     
                     {history.length > 0 && (
-                      <button onClick={undoMove} className="w-full mt-2 py-2 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
+                      <button onClick={undoMove} className="w-full mt-2 py-2 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 hover:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
                         1手戻る (誤タップ修正)
                       </button>
@@ -457,7 +489,7 @@
                   </>
                 )}
               </div>
-              <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 transition-colors">次の出会いへ進む (残り回数-1)</button>
+              <button onClick={resetEncounter} className="w-full mt-4 py-3 bg-gray-100 text-gray-600 font-bold text-sm rounded-xl active:bg-gray-200 hover:bg-gray-200 transition-colors">次の出会いへ進む (残り回数-1)</button>
             </div>
 
             <div className="bg-white rounded-2xl shadow-sm p-5 flex items-center justify-between">
@@ -474,8 +506,8 @@
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
               <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
               <div className="space-y-3">
-                <InputRow id="s6" label="ミュウツーサブレ (6)" hasInfinity={false} />
-                <InputRow id="s5" label="ハイパーサブレ (5)" hasInfinity={false} />
+                {renderInputRow('s6', 'ミュウツーサブレ (6)', false)}
+                {renderInputRow('s5', 'ハイパーサブレ (5)', false)}
                 
                 <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                   <span className="text-sm font-medium text-gray-700">ボーナスサブレ+ (4)</span>
@@ -485,12 +517,38 @@
                   </select>
                 </div>
 
-                <InputRow id="s3" label="スーパーサブレ (3)" hasInfinity={true} />
-                <InputRow id="s1" label="ポケサブレ (1)" hasInfinity={true} />
+                {renderInputRow('s3', 'スーパーサブレ (3)', true)}
+                {renderInputRow('s1', 'ポケサブレ (1)', true)}
                 
                 <div className="flex justify-between items-center pt-2">
                   <span className="text-sm font-bold text-gray-700">残り出会い回数</span>
-                  <input type="number" min="0" value={formData.encounters} onChange={(e) => handleFormChange('encounters', e.target.value)} className="w-16 p-1 border-2 border-purple-300 rounded text-center bg-purple-50 font-bold focus:outline-none" />
+                  <div className="flex gap-1 items-center">
+                    <button 
+                      onClick={() => {
+                        const curr = formData.encounters === '' ? 0 : parseInt(formData.encounters, 10);
+                        handleFormChange('encounters', Math.max(0, curr - 1));
+                      }}
+                      className="w-8 h-8 flex items-center justify-center rounded font-bold text-lg bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300 transition-colors"
+                    >
+                      −
+                    </button>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      value={formData.encounters} 
+                      onChange={(e) => handleFormChange('encounters', e.target.value)} 
+                      className="w-12 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white" 
+                    />
+                    <button 
+                      onClick={() => {
+                        const curr = formData.encounters === '' ? 0 : parseInt(formData.encounters, 10);
+                        handleFormChange('encounters', curr + 1);
+                      }}
+                      className="w-8 h-8 flex items-center justify-center rounded font-bold text-lg bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300 transition-colors"
+                    >
+                      ＋
+                    </button>
+                  </div>
                 </div>
               </div>
 
