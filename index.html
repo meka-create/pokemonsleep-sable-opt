@@ -55,10 +55,8 @@
       const [guaranteedCount, setGuaranteedCount] = useState(3);
       const [simExpectedCatches, setSimExpectedCatches] = useState("計算中...");
       
-      // 戻る(Undo)機能のための履歴State
       const [history, setHistory] = useState([]);
 
-      // 入力ハンドラ
       const handleFormChange = (id, value) => {
         let parsed = value;
         if (value !== '∞') {
@@ -260,7 +258,6 @@
         const actId = currentBestMove.id;
         if (!actId) return;
 
-        // 投げる前の状態を履歴に保存 (Undo用)
         setHistory(prev => [...prev, {
           gauge,
           fedCount,
@@ -283,7 +280,6 @@
         setIsChance(false);
       };
 
-      // 1手戻る (Undo) 処理
       const undoMove = () => {
         if (history.length === 0) return;
         const last = history[history.length - 1];
@@ -292,11 +288,9 @@
         setIsChance(last.isChance);
         setInventory(last.inventory);
         setFormData(last.formData);
-        // 履歴から最新のものを削除
         setHistory(prev => prev.slice(0, -1));
       };
 
-      // ゲージのみのリセット
       const resetGaugeOnly = () => {
         if (window.confirm("フレンドポイントと食べた枚数を0にリセットしますか？")) {
           setGauge(0);
@@ -306,7 +300,6 @@
         }
       };
 
-      // 次の出会いへ進む
       const resetEncounter = () => {
         if (gauge >= 30) {
           setGauge(0);
@@ -318,14 +311,14 @@
         setInventory(prev => {
           const next = { ...prev };
           if (next.encounters > 0) next.encounters -= 1;
-          next.s4 = 1; // ボーナスサブレ自動回復
+          next.s4 = 1; 
           return next;
         });
 
         setFormData(prev => {
           const next = { ...prev };
           if (next.encounters > 0) next.encounters -= 1;
-          next.s4 = 1; // ボーナスサブレ自動回復
+          next.s4 = 1; 
           return next;
         });
       };
@@ -380,7 +373,7 @@
                 <span className="text-sm text-gray-600 font-bold">フレンドポイント</span>
                 <div className="flex items-center gap-2">
                   <button onClick={resetGaugeOnly} className="text-xs bg-gray-200 px-2 py-1 rounded font-bold text-gray-600 active:bg-gray-300 hover:bg-gray-300 transition-colors">
-                    0にリセット
+                    リセット
                   </button>
                   <span className="text-2xl font-black text-purple-700">{gauge} / 30</span>
                 </div>
@@ -445,7 +438,6 @@
                       <button onClick={() => handleThrow(0)} className="bg-gray-400 text-white py-3 rounded-xl font-bold active:bg-gray-500 shadow-sm transition-transform active:scale-95">満腹 (逃走)</button>
                     </div>
                     
-                    {/* Undoボタン (履歴がある場合のみ表示) */}
                     {history.length > 0 && (
                       <button onClick={undoMove} className="w-full mt-2 py-2 bg-gray-200 text-gray-700 font-bold text-sm rounded-xl active:bg-gray-300 transition-colors flex items-center justify-center gap-1 fade-in">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
@@ -472,19 +464,19 @@
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
               <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
               <div className="space-y-3">
-                <InputRow id="s6" label="ミュウツー (6)" hasInfinity={false} />
-                <InputRow id="s5" label="ハイパー (5)" hasInfinity={false} />
+                <InputRow id="s6" label="ミュウツーサブレ (6)" hasInfinity={false} />
+                <InputRow id="s5" label="ハイパーサブレ (5)" hasInfinity={false} />
                 
                 <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
-                  <span className="text-sm font-medium text-gray-700">ボーナス+ (4)</span>
+                  <span className="text-sm font-medium text-gray-700">ボーナスサブレ+ (4)</span>
                   <select value={formData.s4} onChange={(e) => handleFormChange('s4', Number(e.target.value))} className="w-16 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white">
                     <option value={1}>1</option>
                     <option value={0}>0</option>
                   </select>
                 </div>
 
-                <InputRow id="s3" label="スーパー (3)" hasInfinity={true} />
-                <InputRow id="s1" label="ポケ (1)" hasInfinity={true} />
+                <InputRow id="s3" label="スーパーサブレ (3)" hasInfinity={true} />
+                <InputRow id="s1" label="ポケサブレ (1)" hasInfinity={true} />
                 
                 <div className="flex justify-between items-center pt-2">
                   <span className="text-sm font-bold text-gray-700">残り出会い回数</span>
