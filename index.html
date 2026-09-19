@@ -14,7 +14,7 @@
     .fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     
-    /* 標準の上下スピナーを消去してカスタムデザインを適用するため */
+    /* スマホ・PCの標準スピナー（上下矢印）を消去してカスタムデザインを適用するため */
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
@@ -41,17 +41,23 @@
         if (max !== undefined && curr >= max) return;
         onChange(id, curr + 1);
       };
+      
       const handleDown = () => {
         if (isInf) return;
         const curr = value === '' ? 0 : parseInt(value, 10);
         onChange(id, Math.max(0, curr - 1));
       };
 
+      // ボタンの無効化（グレーアウト）判定
+      const isDownDisabled = isInf || (value === '' ? 0 : parseInt(value, 10)) <= 0;
+      const isUpDisabled = isInf || (max !== undefined && (value === '' ? 0 : parseInt(value, 10)) >= max);
+
       return (
         <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2 items-center">
-            {/* ∞ボタンを左側に配置し、縦のラインを揃えるための固定幅スペース */}
+            
+            {/* 左側：∞ボタンの配置スペース（無い場合も縦を揃えるため固定幅w-8を確保） */}
             <div className="w-8 flex justify-center">
               {hasInfinity && (
                 <button 
@@ -63,7 +69,16 @@
               )}
             </div>
             
+            {/* 右側：独立した[－] [数値] [＋] の横並びデザイン */}
             <div className="flex gap-1 items-center">
+              <button 
+                onClick={handleDown} 
+                disabled={isDownDisabled} 
+                className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isDownDisabled ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300'}`}
+              >
+                −
+              </button>
+              
               <input 
                 type={isInf ? "text" : "number"}
                 inputMode={isInf ? "text" : "numeric"}
@@ -74,63 +89,16 @@
                 onChange={(e) => onChange(id, e.target.value)} 
                 className="w-12 p-1 border border-gray-300 rounded text-center font-bold text-gray-700 focus:ring-2 focus:ring-purple-400 outline-none bg-white"
               />
-              <div className="flex flex-col ml-1">
-                <button 
-                  onClick={handleUp} 
-                  disabled={isInf || (max !== undefined && (value === '' ? 0 : parseInt(value, 10)) >= max)} 
-                  className={`flex items-center justify-center w-6 h-4 rounded-t bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300 transition-colors ${isInf || (max !== undefined && (value === '' ? 0 : parseInt(value, 10)) >= max) ? 'opacity-50' : ''}`}
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 15l7-7 7 7" /></svg>
-                </button>
-                <button 
-                  onClick={handleDown} 
-                  disabled={isInf || (value === '' ? 0 : parseInt(value, 10)) <= 0} 
-                  className={`flex items-center justify-center w-6 h-4 rounded-b bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300 transition-colors border-t border-gray-300 ${isInf || (value === '' ? 0 : parseInt(value, 10)) <= 0 ? 'opacity-50' : ''}`}
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 9l-7 7-7-7" /></svg>
-                </button>
-              </div>
+              
+              <button 
+                onClick={handleUp} 
+                disabled={isUpDisabled} 
+                className={`w-8 h-8 flex items-center justify-center rounded font-bold text-lg transition-colors ${isUpDisabled ? 'bg-gray-100 text-gray-300' : 'bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300'}`}
+              >
+                ＋
+              </button>
             </div>
-          </div>
-        </div>
-      );
-    });
-
-    const EncountersRow = React.memo(({ value, onChange }) => {
-      const handleUp = () => {
-        const curr = value === '' ? 0 : parseInt(value, 10);
-        onChange('encounters', curr + 1);
-      };
-      const handleDown = () => {
-        const curr = value === '' ? 0 : parseInt(value, 10);
-        onChange('encounters', Math.max(0, curr - 1));
-      };
-      return (
-        <div className="flex justify-between items-center pt-2">
-          <span className="text-sm font-bold text-gray-700">残り出会い回数</span>
-          <div className="flex gap-2 items-center">
-            {/* 上のフォームと縦揃えにするための透明なスペース */}
-            <div className="w-8"></div>
             
-            <div className="flex gap-1 items-center">
-              <input 
-                type="number" min="0" value={value} 
-                onChange={(e) => onChange('encounters', e.target.value)} 
-                className="w-12 p-1 border-2 border-purple-300 rounded text-center bg-purple-50 font-bold focus:outline-none" 
-              />
-              <div className="flex flex-col ml-1">
-                <button onClick={handleUp} className="flex items-center justify-center w-6 h-4 rounded-t bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300 transition-colors">
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 15l7-7 7 7" /></svg>
-                </button>
-                <button 
-                  onClick={handleDown} 
-                  disabled={(value === '' ? 0 : parseInt(value, 10)) <= 0} 
-                  className={`flex items-center justify-center w-6 h-4 rounded-b bg-gray-200 text-gray-700 active:bg-gray-300 hover:bg-gray-300 transition-colors border-t border-gray-300 ${(value === '' ? 0 : parseInt(value, 10)) <= 0 ? 'opacity-50' : ''}`}
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 9l-7 7-7-7" /></svg>
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       );
@@ -182,6 +150,7 @@
           return;
         }
         
+        // "014" などの入力から先頭の0を取り除く（0単独の場合は消さない）
         let strVal = value.toString().replace(/^0+(?=\d)/, '');
         let parsed = parseInt(strVal, 10);
         if (isNaN(parsed) || parsed < 0) parsed = 0;
@@ -474,7 +443,7 @@
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
           if (curr > 0) next.encounters = curr - 1;
-          next.s4 = 1; 
+          next.s4 = 1; // 次の出会いでボーナスサブレを自動回復
           return next;
         });
 
@@ -482,7 +451,7 @@
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
           if (curr > 0) next.encounters = curr - 1;
-          next.s4 = 1; 
+          next.s4 = 1; // 次の出会いでボーナスサブレを自動回復
           return next;
         });
       };
@@ -595,12 +564,13 @@
             <div className="bg-white rounded-2xl shadow-sm p-5 pb-8 relative">
               <h2 className="text-sm font-bold text-gray-800 mb-4">サブレ所持数・設定</h2>
               <div className="space-y-3">
+                {/* 全ての入力行を共通コンポーネント化し、縦のラインを完璧に揃える */}
                 <InputRow id="s6" label="ミュウツーサブレ (6)" hasInfinity={false} value={formData.s6} onChange={handleFormChange} />
                 <InputRow id="s5" label="ハイパーサブレ (5)" hasInfinity={false} value={formData.s5} onChange={handleFormChange} />
                 <InputRow id="s4" label="ボーナスサブレ+ (4)" hasInfinity={false} value={formData.s4} onChange={handleFormChange} max={1} />
                 <InputRow id="s3" label="スーパーサブレ (3)" hasInfinity={true} value={formData.s3} onChange={handleFormChange} />
                 <InputRow id="s1" label="ポケサブレ (1)" hasInfinity={true} value={formData.s1} onChange={handleFormChange} />
-                <EncountersRow value={formData.encounters} onChange={handleFormChange} />
+                <InputRow id="encounters" label="残り出会い回数" hasInfinity={false} value={formData.encounters} onChange={handleFormChange} />
               </div>
 
               {isModified && (
