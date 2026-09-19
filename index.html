@@ -165,7 +165,7 @@
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
       // =========================================================================
-      // ダイナミック・プライシング最適化エンジン (バグ修正版)
+      // ダイナミック・プライシング最適化エンジン (人工ペナルティ撤廃・確率最適化版)
       // =========================================================================
       const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
         const CATCH_REWARD = 2000; 
@@ -185,7 +185,6 @@
           
           const isException1 = (cEnc <= 1); 
           const isException2 = (cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold); 
-          // 修正: あと1手で一気に届く場合のみ例外3を適用
           const isException3 = (cf === guar - 1 && (30 - cg > 0) && (30 - cg <= 6)); 
 
           let cost6 = 200; 
@@ -196,21 +195,20 @@
             priority6 = 10;
           }
 
-          // 満腹リスク(cf >= guar)下でのペナルティ判定
-          // 最終日や6が余っている時はペナルティなしで強行を許可
-          const isRiskState = (cf >= guar && !isException1 && !isException2);
+          // 手数コスト：満腹リスク下で「サブレを投げる」という行為自体にかかる精神的・時間的コスト
+          // 無限サブレであっても、60%のクジを引くこと自体を嫌うようにする
+          const isRiskState = (cf >= guar);
+          const RISK_COST = isRiskState ? 20 : 0; 
 
           const getCost = (id, baseCost) => {
-            // 無限サブレは常に出し惜しみしない（コスト0）
-            if (cInv[id] === '∞') return 0; 
-            // 満腹リスク時に貴重な有限サブレを無駄撃ちさせないためのペナルティ
-            return baseCost + (isRiskState ? 1000 : 0);
+            if (cInv[id] === '∞') return RISK_COST;
+            return baseCost + RISK_COST;
           };
 
           const costs = { 
             s6: getCost('s6', cost6), 
             s5: getCost('s5', 50), 
-            s4: 0, 
+            s4: RISK_COST, 
             s3: getCost('s3', 30), 
             s1: getCost('s1', 10) 
           };
@@ -227,11 +225,14 @@
           let bestAct = null;
           let bestProb = 0;
 
-          // 修正: パス価値の適正化
-          // 明日になればボーナスと確定枠が復活するため、強引な特攻よりお得
+          // --- 翌日へ回すことの真の価値（パスEV） ---
           let passEv = 0;
           if (cEnc > 1) {
-            passEv = CATCH_REWARD - 300 - (30 - cg) * 15;
+            const bonusNextDay = premium ? 4 : 3;
+            const remainingGauge = Math.max(0, 30 - cg - bonusNextDay);
+            // 翌日になればボーナスサブレが無料でもらえ、確定枠内で安全に投げられる
+            // CATCH_REWARD から、残りを埋めるコストと、出会い回数を1回消費するペナルティ(200)を引く
+            passEv = CATCH_REWARD - 200 - (remainingGauge * 10);
           }
 
           if (passEv > bestVal) {
