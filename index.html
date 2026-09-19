@@ -31,10 +31,8 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback } = React;
 
-    // --- 計算の高速化のためのグローバルキャッシュ ---
     const globalDpMemo = new Map();
 
-    // --- コンポーネントの独立宣言 (フォーカス外れ・縦揃えレイアウト対策) ---
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
       const isInf = value === '∞';
       
@@ -99,7 +97,6 @@
       );
     });
 
-    // --- LocalStorage カスタムフック ---
     function useLocalStorage(key, initialValue) {
       const [storedValue, setStoredValue] = useState(() => {
         try {
@@ -122,7 +119,6 @@
     }
 
     const App = () => {
-      // 状態管理
       const [inventory, setInventory] = useLocalStorage('mewtwo_inventory', {
         s6: 10, s5: 10, s4: 1, s3: 0, s1: '∞', encounters: 14
       });
@@ -169,40 +165,56 @@
       const isModified = JSON.stringify(inventory) !== JSON.stringify(formData);
 
       // =========================================================================
-      // ダイナミック・プライシング最適化エンジン (フリーズしない超速DP)
+      // ダイナミック・プライシング最適化エンジン (バグ修正版)
       // =========================================================================
       const getBestAction = useCallback((g, f, chance, inv, enc, guar, premium) => {
         const CATCH_REWARD = 2000; 
-        const GAUGE_VALUE = 20;    
 
         const calcDP = (cg, cf, cChance, cInv, cEnc) => {
           if (cg >= 30) return { ev: CATCH_REWARD, catchProb: 1.0, action: null };
-          if (cf >= 10) return { ev: cg * GAUGE_VALUE, catchProb: 0.0, action: null };
+          if (cf >= 10) return { ev: 0, catchProb: 0, action: null }; 
 
           const memoKey = `${cg}-${cf}-${cChance}-${cInv.s6}-${cInv.s5}-${cInv.s4}-${cInv.s3}-${cInv.s1}-${cEnc}-${guar}-${premium}`;
           if (globalDpMemo.has(memoKey)) return globalDpMemo.get(memoKey);
 
-          // メモリ保護
           if (globalDpMemo.size > 50000) globalDpMemo.clear();
 
-          // --- PDFの「例外ルール」に基づくダイナミック・コストの算出 ---
-          let cost6 = 200; 
-          let priority6 = 1;
-
+          // --- PDFの「例外ルール」判定 ---
           const isHyper = cInv.s5 > 0 || (cInv.s3 !== '∞' && cInv.s3 > 0);
           const surplusThreshold = isHyper ? cEnc + 3 : cEnc * 2;
           
-          const isException1 = (cEnc <= 1); // 最終日
-          const isException2 = (cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold); // 6が余りそう
-          const isException3 = (cf === guar - 1 && cg < 30); // 確実に食べるのが残り1枚
+          const isException1 = (cEnc <= 1); 
+          const isException2 = (cInv.s6 !== '∞' && cInv.s6 >= surplusThreshold); 
+          // 修正: あと1手で一気に届く場合のみ例外3を適用
+          const isException3 = (cf === guar - 1 && (30 - cg > 0) && (30 - cg <= 6)); 
 
-          // 例外時は6を「無料のボーナスサブレ」よりも安く設定し、強引に最優先させる
+          let cost6 = 200; 
+          let priority6 = 1;
+
           if (isException1 || isException2 || isException3) {
             cost6 = -10; 
             priority6 = 10;
           }
 
-          const costs = { s6: cost6, s5: 50, s4: 0, s3: 30, s1: 10 };
+          // 満腹リスク(cf >= guar)下でのペナルティ判定
+          // 最終日や6が余っている時はペナルティなしで強行を許可
+          const isRiskState = (cf >= guar && !isException1 && !isException2);
+
+          const getCost = (id, baseCost) => {
+            // 無限サブレは常に出し惜しみしない（コスト0）
+            if (cInv[id] === '∞') return 0; 
+            // 満腹リスク時に貴重な有限サブレを無駄撃ちさせないためのペナルティ
+            return baseCost + (isRiskState ? 1000 : 0);
+          };
+
+          const costs = { 
+            s6: getCost('s6', cost6), 
+            s5: getCost('s5', 50), 
+            s4: 0, 
+            s3: getCost('s3', 30), 
+            s1: getCost('s1', 10) 
+          };
+
           const sables = [
             { id: 's4', val: premium ? 4 : 3, name: premium ? 'ボーナス+(4)' : 'ボーナス(3)', priority: 5 },
             { id: 's1', val: 1, name: 'ポケ(1)', priority: 4 },
@@ -215,8 +227,13 @@
           let bestAct = null;
           let bestProb = 0;
 
-          // 自発的なパス（ストップ）の評価
-          const passEv = cg * GAUGE_VALUE;
+          // 修正: パス価値の適正化
+          // 明日になればボーナスと確定枠が復活するため、強引な特攻よりお得
+          let passEv = 0;
+          if (cEnc > 1) {
+            passEv = CATCH_REWARD - 300 - (30 - cg) * 15;
+          }
+
           if (passEv > bestVal) {
             bestVal = passEv;
             bestAct = { id: 'pass', name: '➔ 翌日へ (ストップ)', val: 0 };
@@ -225,7 +242,6 @@
 
           const currentEatProb = (cf >= guar) ? 0.6 : 1.0;
           const currentRejectProb = 1.0 - currentEatProb;
-          const rejectEv = cg * GAUGE_VALUE; 
 
           for (const sable of sables) {
             const count = cInv[sable.id];
@@ -251,18 +267,17 @@
               const valBig = Math.min(30, cg + sable.val * 3);
               const eatEv = (0.9 * evaluateEatEv(valBig)) + (0.1 * CATCH_REWARD) - cost;
               const eatProb = (0.9 * evaluateEatProb(valBig)) + 0.1;
-              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * rejectEv);
+              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * passEv);
               expectedCatchProb = currentEatProb * eatProb;
             } else {
               const valNorm = Math.min(30, cg + sable.val);
               const valBig = Math.min(30, cg + sable.val * 3);
               const eatEv = (0.9 * evaluateEatEv(valNorm)) + (0.08 * evaluateEatEv(valBig)) + (0.02 * CATCH_REWARD) - cost;
               const eatProb = (0.9 * evaluateEatProb(valNorm)) + (0.08 * evaluateEatProb(valBig)) + 0.02;
-              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * rejectEv);
+              expectedValue = (currentEatProb * eatEv) + (currentRejectProb * passEv);
               expectedCatchProb = currentEatProb * eatProb;
             }
 
-            // 期待値が全く同じ場合は、priorityの高い（安い）サブレを優先
             if (expectedValue > bestVal + 1e-6) {
               bestVal = expectedValue;
               bestAct = sable;
@@ -284,7 +299,6 @@
         return calcDP(g, f, chance, inv, enc);
       }, []);
 
-      // フリーズしないため即時同期計算に戻す（1-day DPなので一瞬で終わる）
       const expectedRouteData = useMemo(() => {
         const route = [];
         let currG = actualGauge;
