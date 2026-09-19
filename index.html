@@ -14,6 +14,7 @@
     .fade-in { animation: fadeIn 0.3s ease-in-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     
+    /* 標準の上下スピナーを消去してカスタムデザインを適用するため */
     input[type="number"]::-webkit-outer-spin-button,
     input[type="number"]::-webkit-inner-spin-button {
       -webkit-appearance: none;
@@ -30,7 +31,7 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback } = React;
 
-    // --- コンポーネント (フォーカス外れ・縦揃えレイアウト対策) ---
+    // --- コンポーネントの独立宣言 (フォーカス外れ・縦揃えレイアウト対策) ---
     const InputRow = React.memo(({ id, label, hasInfinity, value, onChange, max }) => {
       const isInf = value === '∞';
       
@@ -50,7 +51,7 @@
         <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
           <span className="text-sm font-medium text-gray-700">{label}</span>
           <div className="flex gap-2 items-center">
-            {/* ∞ボタンを左側に配置し、縦のラインを揃えるための固定幅(w-8) */}
+            {/* ∞ボタンを左側に配置し、縦のラインを揃えるための固定幅スペース */}
             <div className="w-8 flex justify-center">
               {hasInfinity && (
                 <button 
@@ -185,7 +186,7 @@
         let parsed = parseInt(strVal, 10);
         if (isNaN(parsed) || parsed < 0) parsed = 0;
         
-        // ボーナスサブレ(4)は1が上限
+        // ボーナスサブレ(4)は1を上限とする
         if (id === 's4' && parsed > 1) {
           parsed = 1;
           strVal = '1';
@@ -473,7 +474,7 @@
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
           if (curr > 0) next.encounters = curr - 1;
-          next.s4 = 1; // 次の出会いでボーナスサブレを自動回復
+          next.s4 = 1; 
           return next;
         });
 
@@ -481,7 +482,7 @@
           const next = { ...prev };
           const curr = next.encounters === '' ? 0 : parseInt(next.encounters, 10);
           if (curr > 0) next.encounters = curr - 1;
-          next.s4 = 1; // 次の出会いでボーナスサブレを自動回復
+          next.s4 = 1; 
           return next;
         });
       };
