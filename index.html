@@ -3,8 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src blob:; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>ミュウツーサブレ最適化ツール</title>
+  <meta name="description" content="ポケモンスリープのミュウツーサブレ運用を、現在の在庫・フレンドポイント・残り出会い回数から最適化するツール。">
+  <link rel="canonical" href="https://meka-create.github.io/pokemonsleep-sable-opt/">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#9333ea">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ミュウツーサブレOpt">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ミュウツーサブレ最適化ツール">
+  <meta property="og:title" content="ミュウツーサブレ最適化ツール">
+  <meta property="og:description" content="ポケモンスリープのミュウツーサブレ運用を、現在の在庫・フレンドポイント・残り出会い回数から最適化するツール。">
+  <meta property="og:url" content="https://meka-create.github.io/pokemonsleep-sable-opt/">
+  <meta property="og:image" content="https://meka-create.github.io/pokemonsleep-sable-opt/ogp-card.png">
+  <meta property="og:image:width" content="1716">
+  <meta property="og:image:height" content="917">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ミュウツーサブレ最適化ツール">
+  <meta name="twitter:description" content="ポケモンスリープのミュウツーサブレ運用を、現在の在庫・フレンドポイント・残り出会い回数から最適化するツール。">
+  <meta name="twitter:image" content="https://meka-create.github.io/pokemonsleep-sable-opt/ogp-card.png">
   <style>
     :root {
       --gray-50:#f9fafb; --gray-100:#f3f4f6; --gray-200:#e5e7eb; --gray-300:#d1d5db;
@@ -986,6 +1009,13 @@
     els.undoBtn.addEventListener('click',undo); els.nextEncounterBtn.addEventListener('click',nextEncounter);
     els.applyBtn.addEventListener('click',()=>{const clean={...state.formData};for(const k of ['s6','s5','s4','s3','s1','encounters'])if(clean[k]==='')clean[k]=0;state.inventory=clean;state.formData=clone(clean);save('mewtwo_inventory',clean);recalc();});
     window.addEventListener('beforeunload',stopWorker);
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js', { scope: './' }).catch((error) => {
+          console.error('Service Worker registration failed:', error);
+        });
+      });
+    }
     render(); recalc();
   })();
   </script>
