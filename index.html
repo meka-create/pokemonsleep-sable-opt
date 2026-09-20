@@ -47,6 +47,12 @@
     input[type="number"] { -moz-appearance:textfield; }
     .app { min-height:100vh; max-width:448px; margin:0 auto; background:var(--gray-200); display:flex; flex-direction:column; padding-bottom:40px; }
     header { background:#fff; padding:32px 16px 12px; box-shadow:0 1px 3px rgba(0,0,0,.10); position:sticky; top:0; z-index:10; }
+    .header-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .tips-btn { flex:0 0 auto; min-width:48px; height:30px; padding:0 10px; border:1px solid var(--purple-200); border-radius:999px; background:var(--purple-50); color:var(--purple-700); font-size:11px; font-weight:900; letter-spacing:.04em; line-height:28px; transition:background .15s,border-color .15s,box-shadow .15s,transform .15s; }
+    .tips-btn:hover,.tips-btn:active { background:var(--purple-100); border-color:var(--purple-400); }
+    .tips-btn.unseen { border-color:var(--purple-500); box-shadow:0 0 0 3px rgba(168,85,247,.20),0 0 14px rgba(147,51,234,.45); animation:tipsPulse 2.2s ease-in-out infinite; }
+    @keyframes tipsPulse { 0%,100% { box-shadow:0 0 0 3px rgba(168,85,247,.18),0 0 10px rgba(147,51,234,.30); } 50% { box-shadow:0 0 0 6px rgba(168,85,247,.28),0 0 18px rgba(147,51,234,.55); } }
+    @media (prefers-reduced-motion:reduce) { .tips-btn.unseen { animation:none; box-shadow:0 0 0 4px rgba(168,85,247,.30),0 0 14px rgba(147,51,234,.45); } }
     h1 { margin:0; font-size:18px; line-height:28px; font-weight:900; color:var(--purple-900); letter-spacing:-.02em; display:flex; align-items:center; gap:8px; }
     .opt { background:var(--purple-600); color:#fff; padding:4px 8px; border-radius:4px; font-size:12px; line-height:16px; }
     main { flex:1; padding:16px; display:flex; flex-direction:column; gap:16px; }
@@ -145,12 +151,26 @@
     .apply-btn:active:not(:disabled) { transform:scale(.95); }
     .fade-in { animation:fadeIn .3s ease-in-out; }
     @keyframes fadeIn { from { opacity:0; transform:translateY(-5px); } to { opacity:1; transform:translateY(0); } }
+    .tips-dialog { width:min(400px,calc(100vw - 32px)); max-height:86dvh; margin:auto; padding:0; border:0; border-radius:16px; background:#fff; color:var(--gray-800); box-shadow:0 20px 50px rgba(0,0,0,.24); overflow:hidden; }
+    .tips-dialog::backdrop { background:rgba(17,24,39,.52); }
+    .tips-dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 18px; border-bottom:1px solid var(--gray-200); position:sticky; top:0; background:#fff; z-index:1; }
+    .tips-dialog-head h2 { margin:0; font-size:17px; font-weight:900; color:var(--purple-900); }
+    .tips-close { width:32px; height:32px; border-radius:999px; background:var(--gray-100); color:var(--gray-600); font-size:22px; line-height:32px; font-weight:700; }
+    .tips-close:hover,.tips-close:active { background:var(--gray-200); }
+    .tips-dialog-body { max-height:calc(86dvh - 65px); overflow-y:auto; overscroll-behavior:contain; padding:18px; }
+    .tips-section + .tips-section { margin-top:24px; }
+    .tips-section h3 { margin:0 0 10px; font-size:15px; font-weight:900; color:var(--purple-900); }
+    .tips-section p { margin:0; font-size:13px; line-height:1.7; color:var(--gray-700); }
+    .tips-step + .tips-step { margin-top:14px; }
+    .tips-step-title { display:block; margin-bottom:3px; font-size:13px; font-weight:900; color:var(--gray-800); }
+    .tips-note { margin-top:14px !important; padding:10px 12px; border-radius:10px; background:var(--purple-50); border:1px solid var(--purple-100); }
+    .tips-note strong { display:block; margin-bottom:2px; color:var(--purple-900); }
     [hidden] { display:none !important; }
   </style>
 </head>
 <body>
   <div class="app">
-    <header><h1><span class="opt">Opt</span>ミュウツーサブレ</h1></header>
+    <header><div class="header-row"><h1><span class="opt">Opt</span>ミュウツーサブレ</h1><button id="tipsBtn" class="tips-btn" type="button" aria-haspopup="dialog" aria-controls="tipsDialog" title="使い方を開く">TIPS</button></div></header>
     <main>
       <section class="card main-card">
         <h2 class="section-title">実践シミュレーター</h2>
@@ -205,6 +225,29 @@
       </section>
     </main>
   </div>
+
+  <dialog id="tipsDialog" class="tips-dialog" aria-labelledby="tipsDialogTitle">
+    <div class="tips-dialog-head">
+      <h2 id="tipsDialogTitle">TIPS</h2>
+      <button id="tipsClose" class="tips-close" type="button" aria-label="閉じる">×</button>
+    </div>
+    <div class="tips-dialog-body">
+      <section class="tips-section">
+        <h3>このツールについて</h3>
+        <p>現在のフレンドポイント・サブレ所持数・残り出会い回数から、ミュウツーに投げるサブレを計算するツールです。<br>イベント全体の期待捕獲数が高くなるよう、結果に応じて「次の一手」をその都度再計算します。</p>
+      </section>
+
+      <section class="tips-section">
+        <h3>このツールの使い方</h3>
+        <div class="tips-step"><span class="tips-step-title">① 現在のフレンドポイントを入力</span><p>前回までにゲージが進んでいる場合、現在のフレンドポイントを入力。</p></div>
+        <div class="tips-step"><span class="tips-step-title">② サブレ所持数と残り出会い回数を設定</span><p>プレパスの有無を確認。<br>残り出会い回数＝使用するミュウツーのおこうの数。<br>ポケサブレ・スーパーサブレを十分に使える場合は「∞」。<br>設定後、「設定を適用して再計算」。</p></div>
+        <div class="tips-step"><span class="tips-step-title">③ 「次の一手」のサブレを投げる</span><p>結果に合わせて「通常」「大成功」「超成功」「満腹」をタップ。</p></div>
+        <div class="tips-step"><span class="tips-step-title">④ リサーチが終わったら「次の出会いへ進む」</span><p>残り出会い回数とサブレ所持数を引き継いで次を計算。</p></div>
+        <p class="tips-note"><strong>チャンス状態の場合</strong>1投目の前に「チャンス状態」をON。</p>
+        <p class="tips-note"><strong>分割睡眠2回目の場合</strong>「確定ライン」を2枚に変更。</p>
+      </section>
+    </div>
+  </dialog>
 
   <script id="solver-worker" type="text/plain">
     'use strict';
@@ -1017,6 +1060,40 @@
       });
     }
     render(); recalc();
+  })();
+  </script>
+  <script>
+  (() => {
+    'use strict';
+    const TIPS_SEEN_KEY = 'mewtwo_tips_seen_v1';
+    const tipsBtn = document.getElementById('tipsBtn');
+    const tipsDialog = document.getElementById('tipsDialog');
+    const tipsClose = document.getElementById('tipsClose');
+    if (!tipsBtn || !tipsDialog || !tipsClose) return;
+
+    let seen = false;
+    try { seen = localStorage.getItem(TIPS_SEEN_KEY) === '1'; } catch {}
+    tipsBtn.classList.toggle('unseen', !seen);
+
+    const markSeen = () => {
+      tipsBtn.classList.remove('unseen');
+      try { localStorage.setItem(TIPS_SEEN_KEY, '1'); } catch {}
+    };
+    const openTips = () => {
+      markSeen();
+      if (typeof tipsDialog.showModal === 'function') tipsDialog.showModal();
+      else tipsDialog.setAttribute('open', '');
+    };
+    const closeTips = () => {
+      if (typeof tipsDialog.close === 'function') tipsDialog.close();
+      else tipsDialog.removeAttribute('open');
+    };
+
+    tipsBtn.addEventListener('click', openTips);
+    tipsClose.addEventListener('click', closeTips);
+    tipsDialog.addEventListener('click', (event) => {
+      if (event.target === tipsDialog) closeTips();
+    });
   })();
   </script>
 </body>
