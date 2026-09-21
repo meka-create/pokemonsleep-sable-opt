@@ -244,7 +244,7 @@
         <div class="tips-step"><span class="tips-step-title">③ 「次の一手」のサブレを投げる</span><p>結果に合わせて「通常」「大成功」「超成功」「満腹」をタップ。</p></div>
         <div class="tips-step"><span class="tips-step-title">④ リサーチが終わったら「次の出会いへ進む」</span><p>残り出会い回数とサブレ所持数を引き継いで次を計算。</p></div>
         <p class="tips-note"><strong>チャンス状態の場合</strong>1投目の前に「チャンス状態」をON。</p>
-        <p class="tips-note"><strong>分割睡眠2回目の場合</strong>「確定ライン」を2枚に変更。ボーナスサブレは0枚に自動変更。</p>
+        <p class="tips-note"><strong>分割睡眠2回目の場合</strong>「確定ライン」を2枚に変更。連動してボーナスサブレは0枚に自動変更。</p>
       </section>
     </div>
   </dialog>
@@ -1123,11 +1123,16 @@
     els.gaugeInput.addEventListener('input',e=>{const v=e.target.value;if(v==='')state.gauge='';else state.gauge=Math.min(30,Math.max(0,parseInt(v,10)||0));state.history=[];state.isFull=false;save('mewtwo_gauge',state.gauge);save('mewtwo_history',[]);save('mewtwo_isFull',false);recalc();});
     els.chanceToggle.addEventListener('change',e=>{state.isChance=e.target.checked;save('mewtwo_isChance',state.isChance);recalc();});
     els.guaranteeSelect.addEventListener('change',e=>{
+      const previousGuaranteedCount=Number(state.guaranteedCount);
       state.guaranteedCount=Number(e.target.value);
       save('mewtwo_guaranteedCount',state.guaranteedCount);
       if(state.guaranteedCount===2){
         state.inventory={...state.inventory,s4:0};
         state.formData={...state.formData,s4:0};
+        save('mewtwo_inventory',state.inventory);
+      } else if(previousGuaranteedCount===2 && state.guaranteedCount===3){
+        state.inventory={...state.inventory,s4:1};
+        state.formData={...state.formData,s4:1};
         save('mewtwo_inventory',state.inventory);
       }
       recalc();
