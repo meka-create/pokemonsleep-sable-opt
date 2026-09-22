@@ -1218,6 +1218,7 @@
     }
     function undo(){ if(!state.history.length)return; const last=state.history[state.history.length-1]; state.history=state.history.slice(0,-1); save('mewtwo_history',state.history); state.gauge=last.gauge;state.fedCount=last.fedCount;state.isChance=last.isChance;state.isFull=!!last.isFull;state.bonusUsedThisEncounter=!!last.bonusUsedThisEncounter;state.inventory=last.inventory;state.formData=last.formData; save('mewtwo_gauge',state.gauge);save('mewtwo_fedCount',state.fedCount);save('mewtwo_isChance',state.isChance);save('mewtwo_isFull',state.isFull);save('mewtwo_bonusUsedThisEncounter',state.bonusUsedThisEncounter);save('mewtwo_inventory',state.inventory);recalc(); }
     function nextEncounter(){
+      if(!state.isFull&&actualGauge()<30&&!confirm('まだ満腹または完了（フレンドポイント30）になっていません。\n次の出会いへ進みますか？'))return;
       if(actualGauge()>=30){state.gauge=0;save('mewtwo_gauge',0);}
       const scheduledNext = state.detailEnabled && Number(state.futureGuarantees[0])===2 ? 2 : 3;
       state.fedCount=0;state.isChance=false;state.isFull=false;state.history=[];state.bonusUsedThisEncounter=false;
