@@ -171,6 +171,16 @@
     .tips-step-title { display:block; margin-bottom:3px; font-size:13px; font-weight:900; color:var(--gray-800); }
     .tips-note { margin-top:14px !important; padding:10px 12px; border-radius:10px; background:var(--purple-50); border:1px solid var(--purple-100); }
     .tips-note strong { display:block; margin-bottom:2px; color:var(--purple-900); }
+    .confirm-dialog { width:min(360px,calc(100vw - 32px)); }
+    .confirm-dialog .tips-dialog-body { padding:20px 18px 10px; }
+    .confirm-message { margin:0; font-size:14px; line-height:1.7; color:var(--gray-700); text-align:center; }
+    .confirm-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:14px 18px 18px; }
+    .confirm-btn { min-height:44px; border-radius:12px; font-weight:800; transition:background .15s,transform .08s; }
+    .confirm-btn:active { transform:scale(.97); }
+    .confirm-cancel { background:var(--gray-100); color:var(--gray-700); border:1px solid var(--gray-200); }
+    .confirm-cancel:hover,.confirm-cancel:active { background:var(--gray-200); }
+    .confirm-proceed { background:var(--purple-600); color:#fff; }
+    .confirm-proceed:hover,.confirm-proceed:active { background:var(--purple-700); }
     .future-toggle-card { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px; border:1px solid var(--gray-200); border-radius:12px; background:var(--gray-50); }
     .future-toggle-copy strong { display:block; margin-bottom:3px; font-size:14px; color:var(--gray-800); }
     .future-toggle-copy span { display:block; font-size:11px; line-height:1.5; color:var(--gray-500); }
@@ -250,6 +260,19 @@
       </section>
     </main>
   </div>
+
+  <dialog id="nextEncounterDialog" class="tips-dialog confirm-dialog" aria-labelledby="nextEncounterDialogTitle">
+    <div class="tips-dialog-head">
+      <h2 id="nextEncounterDialogTitle">リサーチ中</h2>
+    </div>
+    <div class="tips-dialog-body">
+      <p class="confirm-message">次の出会いへ進みますか？</p>
+    </div>
+    <div class="confirm-actions">
+      <button id="nextEncounterCancel" class="confirm-btn confirm-cancel" type="button">キャンセル</button>
+      <button id="nextEncounterProceed" class="confirm-btn confirm-proceed" type="button">OK</button>
+    </div>
+  </dialog>
 
   <dialog id="futureDialog" class="tips-dialog" aria-labelledby="futureDialogTitle">
     <div class="tips-dialog-head">
@@ -1060,7 +1083,7 @@
     state.formData = clone(state.inventory);
 
     const $ = (id) => document.getElementById(id);
-    const els = Object.fromEntries(['gaugeInput','progressBar','resetGauge','chanceLabel','chanceToggle','guaranteeSelect','feedStatus','nextMove','detailCard','catchProb','route','resultArea','normalBtn','bigBtn','superBtn','fullBtn','fullMessage','passMessage','undoBtn','nextEncounterBtn','expectedTotal','expectBox','premiumToggle','premiumTrack','premiumLabel','inputList','applyWrap','applyBtn','futureDialog','futureDialogClose','futureDetailToggle','futureOffNote','futureScheduleWrap','futureScheduleList'].map(id=>[id,$(id)]));
+    const els = Object.fromEntries(['gaugeInput','progressBar','resetGauge','chanceLabel','chanceToggle','guaranteeSelect','feedStatus','nextMove','detailCard','catchProb','route','resultArea','normalBtn','bigBtn','superBtn','fullBtn','fullMessage','passMessage','undoBtn','nextEncounterBtn','nextEncounterDialog','nextEncounterCancel','nextEncounterProceed','expectedTotal','expectBox','premiumToggle','premiumTrack','premiumLabel','inputList','applyWrap','applyBtn','futureDialog','futureDialogClose','futureDetailToggle','futureOffNote','futureScheduleWrap','futureScheduleList'].map(id=>[id,$(id)]));
 
     const ROWS = [
       {id:'s6', label:()=> 'ミュウツーサブレ (6)', inf:false},
@@ -1217,8 +1240,15 @@
       setStateKey('gauge',Math.min(30,actualGauge()+added),'mewtwo_gauge'); setStateKey('fedCount',Number(state.fedCount)+1,'mewtwo_fedCount'); setStateKey('isChance',false,'mewtwo_isChance'); recalc();
     }
     function undo(){ if(!state.history.length)return; const last=state.history[state.history.length-1]; state.history=state.history.slice(0,-1); save('mewtwo_history',state.history); state.gauge=last.gauge;state.fedCount=last.fedCount;state.isChance=last.isChance;state.isFull=!!last.isFull;state.bonusUsedThisEncounter=!!last.bonusUsedThisEncounter;state.inventory=last.inventory;state.formData=last.formData; save('mewtwo_gauge',state.gauge);save('mewtwo_fedCount',state.fedCount);save('mewtwo_isChance',state.isChance);save('mewtwo_isFull',state.isFull);save('mewtwo_bonusUsedThisEncounter',state.bonusUsedThisEncounter);save('mewtwo_inventory',state.inventory);recalc(); }
-    function nextEncounter(){
-      if(!state.isFull&&actualGauge()<30&&!confirm('まだ満腹または完了（フレンドポイント30）になっていません。\n次の出会いへ進みますか？'))return;
+    function openNextEncounterDialog(){
+      if(typeof els.nextEncounterDialog.showModal==='function')els.nextEncounterDialog.showModal();
+      else els.nextEncounterDialog.setAttribute('open','');
+    }
+    function closeNextEncounterDialog(){
+      if(typeof els.nextEncounterDialog.close==='function')els.nextEncounterDialog.close();
+      else els.nextEncounterDialog.removeAttribute('open');
+    }
+    function proceedNextEncounter(){
       if(actualGauge()>=30){state.gauge=0;save('mewtwo_gauge',0);}
       const scheduledNext = state.detailEnabled && Number(state.futureGuarantees[0])===2 ? 2 : 3;
       state.fedCount=0;state.isChance=false;state.isFull=false;state.history=[];state.bonusUsedThisEncounter=false;
@@ -1230,8 +1260,15 @@
       save('mewtwo_futureGuarantees',state.futureGuarantees);
       state.inventory=next;state.formData=clone(next);save('mewtwo_inventory',next);recalc();
     }
+    function nextEncounter(){
+      if(!state.isFull&&actualGauge()<30){openNextEncounterDialog();return;}
+      proceedNextEncounter();
+    }
 
     buildRows();
+    els.nextEncounterCancel.addEventListener('click',closeNextEncounterDialog);
+    els.nextEncounterProceed.addEventListener('click',()=>{closeNextEncounterDialog();proceedNextEncounter();});
+    els.nextEncounterDialog.addEventListener('click',e=>{if(e.target===els.nextEncounterDialog)closeNextEncounterDialog();});
     els.futureDialogClose.addEventListener('click',closeFutureDialog);
     els.futureDialog.addEventListener('click',e=>{if(e.target===els.futureDialog)closeFutureDialog();});
     els.futureDetailToggle.addEventListener('change',e=>{state.formDetailEnabled=!!e.target.checked;renderFutureDialog();render();});
