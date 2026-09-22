@@ -915,7 +915,19 @@
               let betterTie;
               const currentPreservesS6 = preferPreserveS6OnTie && a.id !== 's6';
               const bestPreservesS6 = preferPreserveS6OnTie && actions[bestAction].id !== 's6';
-              if (currentPreservesS6 !== bestPreservesS6) {
+              const bestAForBonusFinish = actions[bestAction];
+              // 現在回で使わなければ消えるボーナスサブレが、この1投だけで確定捕獲できるなら、
+              // 同期待値・同じ保証内100%捕獲の候補より優先する。
+              // 特にチャンス時は「小さい数字から」のタイブレークで不要な前置き投球を挟まない。
+              const currentBonusFinishesNow = currentKeepsGuarantee
+                && a.id === 's4'
+                && catchesOnMinimum(ai, cg, cp, cChance);
+              const bestBonusFinishesNow = bestKeepsGuarantee
+                && bestAForBonusFinish.id === 's4'
+                && catchesOnMinimum(bestAction, cg, cp, cChance);
+              if (currentBonusFinishesNow !== bestBonusFinishesNow) {
+                betterTie = currentBonusFinishesNow;
+              } else if (currentPreservesS6 !== bestPreservesS6) {
                 // 19以上・余剰目安未満で期待値まで同じなら、PDFの基本方針どおり6を温存。
                 betterTie = currentPreservesS6;
               } else if (currentKeepsGuarantee !== bestKeepsGuarantee) {
