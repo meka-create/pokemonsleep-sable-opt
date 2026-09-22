@@ -134,7 +134,13 @@
     #premiumLabel.on { color:var(--purple-700); }
     .input-list { display:flex; flex-direction:column; gap:12px; }
     .input-row { display:flex; justify-content:space-between; align-items:center; background:var(--gray-50); padding:8px; border-radius:8px; border:1px solid var(--gray-100); }
+    .input-label-group { display:flex; align-items:center; gap:8px; min-width:0; }
     .input-label { font-size:14px; font-weight:500; color:var(--gray-700); }
+    .detail-settings-btn { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:52px; height:28px; padding:0 11px; border:1px solid var(--gray-300); border-radius:999px; background:#fff; color:var(--gray-600); font-size:11px; font-weight:800; line-height:1; transition:background .15s,border-color .15s,color .15s; }
+    .detail-settings-btn:hover,.detail-settings-btn:active { background:var(--purple-50); border-color:var(--purple-300,var(--purple-200)); color:var(--purple-700); }
+    .detail-settings-dot { position:absolute; right:7px; top:50%; width:6px; height:6px; margin-top:-3px; border-radius:50%; background:var(--purple-500); opacity:0; transform:scale(.6); transition:opacity .15s,transform .15s; }
+    .detail-settings-btn.active { border-color:var(--purple-200); color:var(--purple-700); background:var(--purple-50); }
+    .detail-settings-btn.active .detail-settings-dot { opacity:1; transform:scale(1); }
     .input-controls { display:flex; gap:8px; align-items:center; }
     .inf-slot { width:32px; display:flex; justify-content:center; }
     .inf-btn { padding:4px 8px; background:var(--purple-100); color:var(--purple-700); border-radius:4px; font-size:12px; font-weight:700; }
@@ -165,6 +171,25 @@
     .tips-step-title { display:block; margin-bottom:3px; font-size:13px; font-weight:900; color:var(--gray-800); }
     .tips-note { margin-top:14px !important; padding:10px 12px; border-radius:10px; background:var(--purple-50); border:1px solid var(--purple-100); }
     .tips-note strong { display:block; margin-bottom:2px; color:var(--purple-900); }
+    .future-toggle-card { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px; border:1px solid var(--gray-200); border-radius:12px; background:var(--gray-50); }
+    .future-toggle-copy strong { display:block; margin-bottom:3px; font-size:14px; color:var(--gray-800); }
+    .future-toggle-copy span { display:block; font-size:11px; line-height:1.5; color:var(--gray-500); }
+    .detail-toggle-label { position:relative; display:inline-flex; flex:0 0 auto; align-items:center; cursor:pointer; }
+    .detail-toggle-input { position:absolute; opacity:0; pointer-events:none; }
+    .detail-toggle-track { position:relative; width:44px; height:26px; border-radius:999px; background:var(--gray-300); transition:background .2s; }
+    .detail-toggle-track::after { content:""; position:absolute; left:4px; top:4px; width:18px; height:18px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.18); transition:transform .2s; }
+    .detail-toggle-input:checked + .detail-toggle-track { background:var(--purple-500); }
+    .detail-toggle-input:checked + .detail-toggle-track::after { transform:translateX(18px); }
+    .detail-toggle-input:focus-visible + .detail-toggle-track { box-shadow:0 0 0 3px rgba(168,85,247,.25); }
+    .future-off-note,.future-empty-note { margin:14px 0 0; padding:12px 14px; border-radius:10px; background:var(--purple-50); border:1px solid var(--purple-100); color:var(--purple-800); font-size:12px; line-height:1.6; }
+    .future-current-note { margin:14px 0 10px; font-size:12px; line-height:1.6; color:var(--gray-500); }
+    .future-schedule-list { display:flex; flex-direction:column; gap:8px; }
+    .future-schedule-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 10px 10px 12px; border:1px solid var(--gray-200); border-radius:10px; background:#fff; }
+    .future-schedule-name { font-size:13px; font-weight:700; color:var(--gray-700); }
+    .future-segment { display:grid; grid-template-columns:1fr 1fr; width:126px; padding:2px; border-radius:8px; background:var(--gray-100); }
+    .future-choice { min-height:30px; padding:4px 10px; border-radius:6px; background:transparent; color:var(--gray-500); font-size:12px; font-weight:800; transition:background .15s,color .15s,box-shadow .15s; }
+    .future-choice.active { background:#fff; color:var(--purple-700); box-shadow:0 1px 3px rgba(0,0,0,.10); }
+    .future-apply-note { margin:12px 0 0; text-align:center; font-size:11px; color:var(--gray-400); }
     [hidden] { display:none !important; }
   </style>
 </head>
@@ -226,6 +251,28 @@
     </main>
   </div>
 
+  <dialog id="futureDialog" class="tips-dialog" aria-labelledby="futureDialogTitle">
+    <div class="tips-dialog-head">
+      <h2 id="futureDialogTitle">将来の確定ライン</h2>
+      <button id="futureDialogClose" class="tips-close" type="button" aria-label="閉じる">×</button>
+    </div>
+    <div class="tips-dialog-body">
+      <div class="future-toggle-card">
+        <div class="future-toggle-copy"><strong>詳細設定</strong><span>次回以降の確定ラインを個別に設定</span></div>
+        <label class="detail-toggle-label" aria-label="詳細設定を有効にする">
+          <input id="futureDetailToggle" class="detail-toggle-input" type="checkbox">
+          <span class="detail-toggle-track" aria-hidden="true"></span>
+        </label>
+      </div>
+      <p id="futureOffNote" class="future-off-note">現在は、次回以降すべて「3枚」として計算します。</p>
+      <div id="futureScheduleWrap" hidden>
+        <p class="future-current-note">現在の遭遇はメイン画面の「確定ライン」で設定します。ここでは次回以降の予定を設定します。</p>
+        <div id="futureScheduleList" class="future-schedule-list"></div>
+      </div>
+      <p class="future-apply-note">変更は「設定を適用して再計算」で反映されます。</p>
+    </div>
+  </dialog>
+
   <dialog id="tipsDialog" class="tips-dialog" aria-labelledby="tipsDialogTitle">
     <div class="tips-dialog-head">
       <h2 id="tipsDialogTitle">TIPS</h2>
@@ -234,17 +281,15 @@
     <div class="tips-dialog-body">
       <section class="tips-section">
         <h3>このツールについて</h3>
-        <p>現在のフレンドポイント・サブレ所持数・残り出会い回数から、ミュウツーに投げるサブレを計算するツールです。<br>イベント全体の期待捕獲数が高くなるよう、結果に応じて「次の一手」をその都度再計算します。</p>
+        <p>現在のフレンドポイント・サブレ在庫・残り出会い回数から、イベント全体の期待捕獲数が高くなる「次の一手」を計算します。投げた結果を入力するたびに再計算します。</p>
       </section>
 
       <section class="tips-section">
-        <h3>このツールの使い方</h3>
-        <div class="tips-step"><span class="tips-step-title">① 現在のフレンドポイントを入力</span><p>前回までにゲージが進んでいる場合、現在のフレンドポイントを入力。</p></div>
-        <div class="tips-step"><span class="tips-step-title">② サブレ所持数と残り出会い回数を設定</span><p>プレパスの有無を確認。<br>残り出会い回数＝使用するミュウツーのおこうの数。<br>ポケサブレ・スーパーサブレを十分に使える場合は「∞」。<br>設定後、「設定を適用して再計算」。</p></div>
-        <div class="tips-step"><span class="tips-step-title">③ 「次の一手」のサブレを投げる</span><p>結果に合わせて「通常」「大成功」「超成功」「満腹」をタップ。</p></div>
-        <div class="tips-step"><span class="tips-step-title">④ リサーチが終わったら「次の出会いへ進む」</span><p>残り出会い回数とサブレ所持数を引き継いで次を計算。</p></div>
-        <p class="tips-note"><strong>チャンス状態の場合</strong>1投目の前に「チャンス状態」をON。</p>
-        <p class="tips-note"><strong>分割睡眠2回目の場合</strong>「確定ライン」を2枚に変更。連動してボーナスサブレは0枚に自動変更。</p>
+        <h3>使い方</h3>
+        <div class="tips-step"><span class="tips-step-title">① 現在の状態を設定</span><p>フレンドポイントを入力。チャンス状態なら1投目の前にON。分割睡眠2回目なら「確定ライン」を2枚にします。2枚にすると、ボーナスサブレも連動して0枚になります。</p></div>
+        <div class="tips-step"><span class="tips-step-title">② 在庫と残り回数を設定</span><p>プレパス、各サブレの所持数、今後ミュウツーに出会う予定回数を設定。十分に使えるポケサブレ・スーパーサブレは「∞」にできます。設定後、「設定を適用して再計算」。</p></div>
+        <div class="tips-step"><span class="tips-step-title">③ 結果を入力</span><p>表示された「次の一手」を投げ、実際の結果をタップ。リサーチ終了後は「次の出会いへ進む」。</p></div>
+        <p class="tips-note"><strong>将来の2枚保証</strong>今後の分割睡眠2回目が決まっている場合は、残り出会い回数の「詳細」で詳細設定をONにし、対象の出会いを2枚にします。</p>
       </section>
     </div>
   </dialog>
@@ -261,6 +306,8 @@
         const context = makeContext({
           premium: !!msg.premium,
           guaranteedCount: msg.guaranteedCount,
+          detailEnabled: !!msg.detailEnabled,
+          futureGuarantees: msg.futureGuarantees,
           maxEncounters: msg.state?.encounters,
           inventory: msg.state?.inventory || {}
         });
@@ -278,11 +325,19 @@
 
     function makeContext(cfg) {
       const premium = !!cfg.premium;
-      // UIの確定ラインは現在遭遇だけの条件。分割2回目は2枚保証、
-      // 次の出会い以降はPDF本文どおり通常の3枚保証へ戻す。
+      // UIの確定ラインは現在遭遇だけの条件。詳細設定OFFでは次回以降を通常の3枚保証、
+      // ONでは順番付きの将来スケジュール（2枚/3枚）をそのまま期待値計算へ反映する。
       const currentGuar = Number(cfg.guaranteedCount) === 2 ? 2 : 3;
       const standardGuar = 3;
       const maxEnc = Math.max(0, Math.floor(Number(cfg.maxEncounters) || 0));
+      const detailEnabled = !!cfg.detailEnabled;
+      const rawFutureGuarantees = Array.isArray(cfg.futureGuarantees) ? cfg.futureGuarantees : [];
+      // 詳細設定OFFでは従来どおり将来遭遇をすべて3枚保証として扱う。
+      // ONの場合だけ、現在遭遇を除く順番付きスケジュールをDPへ反映する。
+      const futureGuarantees = Array.from({ length: Math.max(0, maxEnc - 1) }, (_, i) =>
+        detailEnabled && Number(rawFutureGuarantees[i]) === 2 ? 2 : 3
+      );
+      const hasTwoGuarantee = currentGuar === 2 || futureGuarantees.some((v) => v === 2);
       const values = { s6: 6, s5: 5, s4: premium ? 4 : 3, s3: 3, s1: 1 };
       const ids = ['s6', 's5', 's4', 's3', 's1'];
       const maxCounts = {};
@@ -312,7 +367,7 @@
 
       const radix = {
         phase: standardGuar + 1,
-        mode: currentGuar === 2 ? 2 : 1, // 3枚モードでは余分な状態軸を増やさない
+        mode: hasTwoGuarantee ? 2 : 1, // 現在または将来に2枚保証がある時だけ状態軸を持つ
         s6: isInf.s6 ? 1 : maxCounts.s6 + 1,
         s5: isInf.s5 ? 1 : maxCounts.s5 + 1,
         s4: 2,
@@ -357,6 +412,8 @@
         currentGuar,
         standardGuar,
         maxEnc,
+        detailEnabled,
+        futureGuarantees,
         values,
         isInf,
         maxCounts,
@@ -390,6 +447,14 @@
       const startMode = ctx.currentGuar === 2 ? 1 : 0;
       const guarForMode = (mode) => mode === 1 ? 2 : ctx.standardGuar;
       const isPdfStandardMode = (mode) => mode === 0;
+      // ce は「現在遭遇を含む残り出会い回数」。maxEncとの差から、
+      // 次回以降のどのスケジュール位置かを一意に求められる。
+      const modeForRemaining = (ce) => {
+        if (ce >= ctx.maxEnc) return startMode;
+        const index = ctx.maxEnc - ce - 1;
+        return Number(ctx.futureGuarantees[index]) === 2 ? 1 : 0;
+      };
+      const bonusForMode = (mode) => mode === 1 ? 0 : 1;
       const phase = Math.max(0, Math.min(guarForMode(startMode), Math.floor(Number(input.fedCount) || 0)));
       const enc = Math.max(0, Math.min(ctx.maxEnc, Math.floor(Number(input.encounters) || 0)));
       const chance = !!input.chance && phase === 0;
@@ -598,9 +663,13 @@
 
       const nextEncounterEV = (gCarry, s6, s5, s3, s1, ce) => {
         if (ce <= 1) return 0;
-        // 次の出会いではボーナスサブレが1枚に戻り、チャンスを10%で再抽選。
-        return 0.1 * dp(gCarry, 0, 1, s6, s5, 1, s3, s1, ce - 1, 0)
-             + 0.9 * dp(gCarry, 0, 0, s6, s5, 1, s3, s1, ce - 1, 0);
+        const nextCe = ce - 1;
+        const nextMode = modeForRemaining(nextCe);
+        const nextBonus = bonusForMode(nextMode);
+        // 将来スケジュールが2枚保証ならボーナス0枚、3枚保証なら1枚。
+        // チャンスは従来どおり10%で再抽選する。
+        return 0.1 * dp(gCarry, 0, 1, s6, s5, nextBonus, s3, s1, nextCe, nextMode)
+             + 0.9 * dp(gCarry, 0, 0, s6, s5, nextBonus, s3, s1, nextCe, nextMode);
       };
 
       // 現在遭遇の捕獲確率は、DPの主目的（イベント全体の期待捕獲数）とは分離して扱う。
@@ -715,39 +784,18 @@
 
         const pdfStandardMode = isPdfStandardMode(mode);
         const guar = guarForMode(mode);
-        // 通常3枚保証・分割2枚保証のどちらでも、保証内で100%届くなら捕まえ切る。
+        // 通常3枚保証・分割2枚保証のどちらでも、現状態から保証内100%捕獲が可能かを判定する。
+        // これはハード制約ではなく、期待値同値時の優先判定にだけ使う。
         const guaranteedFinish = canGuaranteeCatch(mode, cg, cp, cChance, s6, s5, s4, s3, s1);
 
         const remainingGauge = TARGET - cg;
         const normalNonChance = !cChance;
         const type = strategyType(ce, s5, s3);
 
-        // 最新版X.pdfの「保証が残り1枚」の意味に限定する。
-        // 以前のように「保証が残り1枚なら当日捕獲率を最大化」するのではなく、
-        // “その確定1枚だけで捕まえ切れるサブレがある”場合にだけ確定捕獲を優先する。
-        // （この場合は bestGuaranteedPlan 自体が1投完結ルートを返す。）
-        const oneGuaranteedLeftException = pdfStandardMode
-          && cp === guar - 1
-          && actions.some((a) => {
-            const count = getCount(a.id, s6, s5, s4, s3, s1);
-            if (count === 0) return false;
-            const guaranteedMult = (cChance && cp === 0) ? 3 : 1;
-            return cg + a.val * guaranteedMult >= TARGET;
-          });
-
-        // X記事で残り16〜18の温存例外が明示されているのはポケ中心寄り。
-        // 3タイプ自体は手持ちに応じて行き来するため、固定在庫名ではなく strategyType() の
-        // 柔軟な判定が 'poke' の時だけ「今100%で取り切る」対「6を温存する」をDP比較する。
-        // ハイパー／スーパー中心では記事の共通ルールどおり保証内の確定捕獲を優先する。
-        const allowEarlyPreserveComparison = pdfStandardMode
-          && guaranteedFinish
-          && type === 'poke'
-          && normalNonChance
-          && remainingGauge >= 16
-          && remainingGauge <= 18
-          && ce > 1
-          && !oneGuaranteedLeftException;
-        const mustFinishNow = guaranteedFinish && !allowEarlyPreserveComparison;
+        // 保証内100%捕獲はハード制約にせず、イベント全体の期待捕獲数を最優先する。
+        // 期待値が同値の候補同士では、PDF/X記事の「保証内に届くなら捕まえ切るのが基本」に合わせ、
+        // 通常成功だけでも残り保証内100%捕獲を維持できる行動を優先する。
+        const preferGuaranteedFinishOnTie = guaranteedFinish;
 
         // 残り19以上の「6温存」はPDFでも基本方針・目安であり、厳密な境界ではない。
         // そのため6を候補からハード除外せず、全候補をDPで比較する。期待値が同じ時だけ、
@@ -760,15 +808,14 @@
           && countAvailable(s6)
           && !isS6Surplus(ce, s6, s5, s3);
 
-        // PDF掲載表の開始条件に一致する時だけ、その表の初手を優先する。
-        const pdfPreferredAi = mustFinishNow
+        // PDF掲載表の開始条件に一致する時だけ、その表の初手を同期待値時の優先候補にする。
+        const pdfPreferredAi = preferGuaranteedFinishOnTie
           ? pdfStartPreferredAction(mode, cg, cp, cChance, s6, s5, s4, s3, s1, ce)
           : -1;
 
-        // 取り切りをハード制約にする状態だけ翌日送りを候補から外す。
-        // 残り16〜18の温存比較と、6余り目安到達後は通常のDP比較に戻す。
-        let bestEV = mustFinishNow ? -Infinity : passEV;
-        let bestAction = mustFinishNow ? -3 : -2;
+        // 翌日送りも含めて全候補を期待値比較する。保証内捕獲は候補の除外条件にしない。
+        let bestEV = passEV;
+        let bestAction = -2;
         const eatProb = cp >= guarForMode(mode) ? 0.6 : 1.0;
 
         for (let ai = 0; ai < actions.length; ai++) {
@@ -784,11 +831,6 @@
           let [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
 
           const np = Math.min(guar, cp + 1);
-
-          if (mustFinishNow
-              && !actionPreservesGuaranteedFinish(mode, ai, cg, cp, cChance, s6, s5, s4, s3, s1)) {
-            continue;
-          }
 
           const evAfterEat = (ng) => {
             const clamped = Math.min(TARGET, ng);
@@ -815,9 +857,9 @@
             bestEV = expectedValue;
             bestAction = ai;
           } else if (Math.abs(expectedValue - bestEV) <= EPS) {
-            // 残り16〜18の比較で期待値が同値なら、記事の「基本は捕まえ切り」に合わせて
-            // 100%取り切りを維持する行動を優先する。それ以外はPDF表→小さい順で決める。
-            const currentKeepsGuarantee = allowEarlyPreserveComparison
+            // 期待値が同値なら、まずPDF/X記事の基本方針どおり保証内100%捕獲を維持する行動を優先。
+            // それでも同値なら既存の6温存・PDF表・小さい順などのタイブレークを使う。
+            const currentKeepsGuarantee = preferGuaranteedFinishOnTie
               && actionPreservesGuaranteedFinish(mode, ai, cg, cp, cChance, s6, s5, s4, s3, s1);
             if (bestAction === -2) {
               if (currentKeepsGuarantee) {
@@ -825,7 +867,7 @@
                 bestAction = ai;
               }
             } else if (bestAction >= 0) {
-              const bestKeepsGuarantee = allowEarlyPreserveComparison
+              const bestKeepsGuarantee = preferGuaranteedFinishOnTie
                 && actionPreservesGuaranteedFinish(mode, bestAction, cg, cp, cChance, s6, s5, s4, s3, s1);
               const currentIsPdf = pdfPreferredAi >= 0 && ai === pdfPreferredAi;
               const bestIsPdf = pdfPreferredAi >= 0 && bestAction === pdfPreferredAi;
@@ -836,7 +878,7 @@
                 // 19以上・余剰目安未満で期待値まで同じなら、PDFの基本方針どおり6を温存。
                 betterTie = currentPreservesS6;
               } else if (currentKeepsGuarantee !== bestKeepsGuarantee) {
-                // 16〜18の温存比較では、まず記事どおり100%取り切り維持を最優先。
+                // 保証内100%捕獲を維持できる候補を同期待値時だけ優先。
                 betterTie = currentKeepsGuarantee;
               } else {
                 const bestA = actions[bestAction];
@@ -844,7 +886,7 @@
                 // 確定取り切り中、現在候補なら今すぐ捕獲でき、従来候補の通常成功ルートでも
                 // 直後に同じサブレを使う場合だけ、余計な前置き投球を省く。逆方向も対称に判定。
                 let decidedByRedundantThrow = false;
-                if (mustFinishNow && !cChance) {
+                if (currentKeepsGuarantee && bestKeepsGuarantee && !cChance) {
                   const currentCatchesNow = catchesOnMinimum(ai, cg, cp, cChance);
                   const bestCatchesNow = catchesOnMinimum(bestAction, cg, cp, cChance);
                   if (currentCatchesNow && !bestCatchesNow
@@ -868,14 +910,13 @@
                 );
                 let decidedByBonus4 = false;
                 if (!decidedByRedundantThrow && isPremiumBonusVsSuper) {
-                  // mustFinishNow 中の候補は、どちらも「残り保証内で通常成功だけでも100%捕獲」を
-                  // 維持する行動に既に限定済み。この場合は当該遭遇の捕獲率が双方100%なので、
-                  // 高コストな捕獲率再帰を走らせず、そのままボーナス+(4)を優先できる。
-                  if (mustFinishNow) {
+                  // 双方とも通常成功だけで保証内100%捕獲を維持する場合は、当該遭遇の捕獲率が
+                  // どちらも100%なので、高コストな捕獲率再帰を走らせずボーナス+(4)を優先できる。
+                  if (currentKeepsGuarantee && bestKeepsGuarantee) {
                     betterTie = a.id === 's4';
                     decidedByBonus4 = true;
                   } else {
-                    // 取り切りハード制約外では捕獲率が同じとは限らないため、従来どおり
+                    // それ以外では捕獲率が同じとは限らないため、従来どおり
                     // 当該遭遇の捕獲率まで同値の時だけボーナス+(4)を優先する。
                     const currentCatch = forcedActionCatchProb(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
                     const bestCatch = forcedActionCatchProb(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
@@ -903,13 +944,6 @@
           }
         }
 
-        // mustFinishNow=true なら理論上必ず候補が1つ以上ある。万一入力の不整合等で
-        // 候補が見つからなかった場合だけ安全側で従来の翌日送りへフォールバックする。
-        if (bestAction === -3) {
-          bestEV = passEV;
-          bestAction = -2;
-        }
-
         ctx.memo.set(key, bestEV, bestAction);
         return bestEV;
       }
@@ -921,8 +955,11 @@
         let futureEV = 0;
         if (enc > 1) {
           const carryG = g >= TARGET ? 0 : g;
-          futureEV = 0.1 * dp(carryG, 0, 1, startInv.s6, startInv.s5, 1, startInv.s3, startInv.s1, enc - 1, 0)
-                   + 0.9 * dp(carryG, 0, 0, startInv.s6, startInv.s5, 1, startInv.s3, startInv.s1, enc - 1, 0);
+          const nextCe = enc - 1;
+          const nextMode = modeForRemaining(nextCe);
+          const nextBonus = bonusForMode(nextMode);
+          futureEV = 0.1 * dp(carryG, 0, 1, startInv.s6, startInv.s5, nextBonus, startInv.s3, startInv.s1, nextCe, nextMode)
+                   + 0.9 * dp(carryG, 0, 0, startInv.s6, startInv.s5, nextBonus, startInv.s3, startInv.s1, nextCe, nextMode);
         }
         return {
           ev: futureEV,
@@ -993,9 +1030,18 @@
     const load = (key, fallback) => { try { const v=localStorage.getItem(key); return v===null ? fallback : JSON.parse(v); } catch { return fallback; } };
     const save = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} };
     const clone = (v) => JSON.parse(JSON.stringify(v));
+    const encounterCount = (value) => Math.max(0, Math.floor(Number(value) || 0));
+    const normalizeFutureGuarantees = (schedule, encounters) => {
+      const length = Math.max(0, encounterCount(encounters) - 1);
+      const source = Array.isArray(schedule) ? schedule : [];
+      return Array.from({ length }, (_, i) => Number(source[i]) === 2 ? 2 : 3);
+    };
+    const initialInventory = load('mewtwo_inventory', DEFAULT_INV);
+    const initialDetailEnabled = !!load('mewtwo_futureGuaranteeDetailEnabled', false);
+    const initialFutureGuarantees = normalizeFutureGuarantees(load('mewtwo_futureGuarantees', []), initialInventory.encounters);
 
     const state = {
-      inventory: load('mewtwo_inventory', DEFAULT_INV),
+      inventory: initialInventory,
       formData: null,
       gauge: load('mewtwo_gauge', 0),
       isChance: load('mewtwo_isChance', false),
@@ -1005,12 +1051,16 @@
       history: load('mewtwo_history', []),
       bonusUsedThisEncounter: load('mewtwo_bonusUsedThisEncounter', false),
       isPremium: load('mewtwo_isPremium', true),
+      detailEnabled: initialDetailEnabled,
+      futureGuarantees: initialFutureGuarantees,
+      formDetailEnabled: initialDetailEnabled,
+      formFutureGuarantees: clone(initialFutureGuarantees),
       engine: { isCalculating:false, bestMove:{type:'計算中...',id:null,prob:0}, expectedTotal:'計算中...', routeData:{route:[],finalG:0} }
     };
     state.formData = clone(state.inventory);
 
     const $ = (id) => document.getElementById(id);
-    const els = Object.fromEntries(['gaugeInput','progressBar','resetGauge','chanceLabel','chanceToggle','guaranteeSelect','feedStatus','nextMove','detailCard','catchProb','route','resultArea','normalBtn','bigBtn','superBtn','fullBtn','fullMessage','passMessage','undoBtn','nextEncounterBtn','expectedTotal','expectBox','premiumToggle','premiumTrack','premiumLabel','inputList','applyWrap','applyBtn'].map(id=>[id,$(id)]));
+    const els = Object.fromEntries(['gaugeInput','progressBar','resetGauge','chanceLabel','chanceToggle','guaranteeSelect','feedStatus','nextMove','detailCard','catchProb','route','resultArea','normalBtn','bigBtn','superBtn','fullBtn','fullMessage','passMessage','undoBtn','nextEncounterBtn','expectedTotal','expectBox','premiumToggle','premiumTrack','premiumLabel','inputList','applyWrap','applyBtn','futureDialog','futureDialogClose','futureDetailToggle','futureOffNote','futureScheduleWrap','futureScheduleList'].map(id=>[id,$(id)]));
 
     const ROWS = [
       {id:'s6', label:()=> 'ミュウツーサブレ (6)', inf:false},
@@ -1025,8 +1075,12 @@
       els.inputList.innerHTML='';
       for (const row of ROWS) {
         const wrap=document.createElement('div'); wrap.className='input-row'; wrap.dataset.id=row.id;
-        wrap.innerHTML=`<span class="input-label"></span><div class="input-controls"><div class="inf-slot">${row.inf?'<button class="inf-btn" type="button">∞</button>':''}</div><div class="stepper"><button class="step-btn down" type="button">−</button><input class="count-input" inputmode="numeric" min="0" ${row.max!==undefined?`max="${row.max}"`:''}><button class="step-btn up" type="button">＋</button></div></div>`;
+        const labelHtml = row.id==='encounters'
+          ? `<div class="input-label-group"><span class="input-label"></span><button id="futureDetailBtn" class="detail-settings-btn" type="button" aria-haspopup="dialog" aria-controls="futureDialog"><span>詳細</span><span class="detail-settings-dot" aria-hidden="true"></span></button></div>`
+          : `<span class="input-label"></span>`;
+        wrap.innerHTML=`${labelHtml}<div class="input-controls"><div class="inf-slot">${row.inf?'<button class="inf-btn" type="button">∞</button>':''}</div><div class="stepper"><button class="step-btn down" type="button">−</button><input class="count-input" inputmode="numeric" min="0" ${row.max!==undefined?`max="${row.max}"`:''}><button class="step-btn up" type="button">＋</button></div></div>`;
         const input=wrap.querySelector('.count-input'); input.type='number';
+        if(row.id==='encounters') wrap.querySelector('#futureDetailBtn').addEventListener('click',openFutureDialog);
         wrap.querySelector('.down').addEventListener('click',()=>stepRow(row,-1));
         wrap.querySelector('.up').addEventListener('click',()=>stepRow(row,1));
         input.addEventListener('input',()=>changeForm(row,input.value));
@@ -1041,15 +1095,22 @@
       else {
         let n=parseInt(String(value).replace(/^0+(?=\d)/,''),10); if(!Number.isFinite(n)||n<0)n=0; if(row.max!==undefined)n=Math.min(row.max,n); state.formData[row.id]=n;
       }
+      if(row.id==='encounters' && state.formData.encounters!=='') {
+        state.formFutureGuarantees=normalizeFutureGuarantees(state.formFutureGuarantees,state.formData.encounters);
+      }
       render();
     }
     function stepRow(row, delta) {
       const v=state.formData[row.id]; if(v==='∞') return;
-      let n=v===''?0:(parseInt(v,10)||0); n=Math.max(0,n+delta); if(row.max!==undefined)n=Math.min(row.max,n); state.formData[row.id]=n; render();
+      let n=v===''?0:(parseInt(v,10)||0); n=Math.max(0,n+delta); if(row.max!==undefined)n=Math.min(row.max,n); state.formData[row.id]=n;
+      if(row.id==='encounters') state.formFutureGuarantees=normalizeFutureGuarantees(state.formFutureGuarantees,n);
+      render();
     }
     function setStateKey(key,value,storageKey){ state[key]=value; if(storageKey) save(storageKey,value); }
     const actualGauge=()=> state.gauge===''?0:(Number(state.gauge)||0);
-    const modified=()=> JSON.stringify(state.inventory)!==JSON.stringify(state.formData);
+    const modified=()=> JSON.stringify(state.inventory)!==JSON.stringify(state.formData)
+      || state.detailEnabled!==state.formDetailEnabled
+      || JSON.stringify(state.futureGuarantees)!==JSON.stringify(state.formFutureGuarantees);
 
     let worker=null, workerUrl=null, requestId=0;
     function stopWorker(){ if(worker){worker.terminate();worker=null;} if(workerUrl){URL.revokeObjectURL(workerUrl);workerUrl=null;} }
@@ -1073,7 +1134,43 @@
         stopWorker(); render();
       };
       worker.onerror=(e)=>{ if(rid!==requestId)return; console.error(e.message||e); state.engine={isCalculating:false,bestMove:{type:'エラー',id:null,prob:0},expectedTotal:'0.00',routeData:{route:[],finalG:actualGauge()}}; stopWorker(); render(); };
-      worker.postMessage({type:'solve',requestId:rid,premium:state.isPremium,guaranteedCount:Number(state.guaranteedCount)||3,state:{gauge:actualGauge(),fedCount:Number(state.fedCount)||0,chance:!!state.isChance,encounters:enc,inventory:state.inventory,encounterEnded:state.isFull||actualGauge()>=30}});
+      worker.postMessage({type:'solve',requestId:rid,premium:state.isPremium,guaranteedCount:Number(state.guaranteedCount)||3,detailEnabled:!!state.detailEnabled,futureGuarantees:state.futureGuarantees,state:{gauge:actualGauge(),fedCount:Number(state.fedCount)||0,chance:!!state.isChance,encounters:enc,inventory:state.inventory,encounterEnded:state.isFull||actualGauge()>=30}});
+    }
+
+    function renderFutureDialog(){
+      if(!els.futureDialog)return;
+      state.formFutureGuarantees=normalizeFutureGuarantees(state.formFutureGuarantees,state.formData.encounters);
+      els.futureDetailToggle.checked=!!state.formDetailEnabled;
+      els.futureOffNote.hidden=!!state.formDetailEnabled;
+      els.futureScheduleWrap.hidden=!state.formDetailEnabled;
+      els.futureScheduleList.innerHTML='';
+      if(!state.formDetailEnabled)return;
+      const count=encounterCount(state.formData.encounters);
+      if(count<=1){
+        const note=document.createElement('p'); note.className='future-empty-note'; note.textContent='現在の遭遇より後の予定はありません。';
+        els.futureScheduleList.appendChild(note);
+        return;
+      }
+      state.formFutureGuarantees.forEach((value,index)=>{
+        const row=document.createElement('div'); row.className='future-schedule-row';
+        const name=document.createElement('span'); name.className='future-schedule-name'; name.textContent=index===0?'次回':`${index+2}回目`;
+        const segment=document.createElement('div'); segment.className='future-segment'; segment.setAttribute('role','group'); segment.setAttribute('aria-label',`${name.textContent}の確定ライン`);
+        for(const choice of [3,2]){
+          const button=document.createElement('button'); button.type='button'; button.className=`future-choice${Number(value)===choice?' active':''}`; button.textContent=`${choice}枚`; button.setAttribute('aria-pressed',Number(value)===choice?'true':'false');
+          button.addEventListener('click',()=>{ state.formFutureGuarantees[index]=choice; renderFutureDialog(); render(); });
+          segment.appendChild(button);
+        }
+        row.append(name,segment); els.futureScheduleList.appendChild(row);
+      });
+    }
+    function openFutureDialog(){
+      renderFutureDialog();
+      if(typeof els.futureDialog.showModal==='function') els.futureDialog.showModal();
+      else els.futureDialog.setAttribute('open','');
+    }
+    function closeFutureDialog(){
+      if(typeof els.futureDialog.close==='function') els.futureDialog.close();
+      else els.futureDialog.removeAttribute('open');
     }
 
     function renderRoute(){
@@ -1104,6 +1201,8 @@
       els.expectedTotal.textContent=state.engine.expectedTotal; els.expectBox.classList.toggle('dim',calc);
       els.premiumToggle.checked=!!state.isPremium; els.premiumToggle.disabled=calc; els.premiumTrack.classList.toggle('on',state.isPremium); els.premiumLabel.classList.toggle('on',state.isPremium);
       for(const row of ROWS){ const wrap=els.inputList.querySelector(`[data-id="${row.id}"]`); if(!wrap)continue; wrap.querySelector('.input-label').textContent=row.label(); const input=wrap.querySelector('.count-input'); const v=state.formData[row.id]; input.type=v==='∞'?'text':'number'; input.readOnly=v==='∞'; input.value=v==='∞'?'∞':v; const down=wrap.querySelector('.down'),up=wrap.querySelector('.up'); const n=v===''?0:(parseInt(v,10)||0); down.disabled=v==='∞'||n<=0; up.disabled=v==='∞'||(row.max!==undefined&&n>=row.max); }
+      const futureDetailBtn=$('futureDetailBtn'); if(futureDetailBtn){ futureDetailBtn.classList.toggle('active',!!state.formDetailEnabled); futureDetailBtn.setAttribute('aria-label',state.formDetailEnabled?'将来の確定ライン詳細（有効）':'将来の確定ライン詳細'); }
+      if(els.futureDialog&&els.futureDialog.open) renderFutureDialog();
       els.applyWrap.hidden=!modified(); els.applyBtn.disabled=calc; els.applyBtn.classList.toggle('disabled',calc); els.applyBtn.classList.toggle('wait',calc);
     }
 
@@ -1118,9 +1217,23 @@
       setStateKey('gauge',Math.min(30,actualGauge()+added),'mewtwo_gauge'); setStateKey('fedCount',Number(state.fedCount)+1,'mewtwo_fedCount'); setStateKey('isChance',false,'mewtwo_isChance'); recalc();
     }
     function undo(){ if(!state.history.length)return; const last=state.history[state.history.length-1]; state.history=state.history.slice(0,-1); save('mewtwo_history',state.history); state.gauge=last.gauge;state.fedCount=last.fedCount;state.isChance=last.isChance;state.isFull=!!last.isFull;state.bonusUsedThisEncounter=!!last.bonusUsedThisEncounter;state.inventory=last.inventory;state.formData=last.formData; save('mewtwo_gauge',state.gauge);save('mewtwo_fedCount',state.fedCount);save('mewtwo_isChance',state.isChance);save('mewtwo_isFull',state.isFull);save('mewtwo_bonusUsedThisEncounter',state.bonusUsedThisEncounter);save('mewtwo_inventory',state.inventory);recalc(); }
-    function nextEncounter(){ if(actualGauge()>=30){state.gauge=0;save('mewtwo_gauge',0);} state.fedCount=0;state.isChance=false;state.isFull=false;state.history=[];state.bonusUsedThisEncounter=false; save('mewtwo_fedCount',0);save('mewtwo_isChance',false);save('mewtwo_isFull',false);save('mewtwo_history',[]);save('mewtwo_bonusUsedThisEncounter',false); if(state.guaranteedCount===2){state.guaranteedCount=3;save('mewtwo_guaranteedCount',3);} const next={...state.inventory};let e=parseInt(next.encounters,10)||0;if(e>0)next.encounters=e-1;next.s4=1;state.inventory=next;state.formData=clone(next);save('mewtwo_inventory',next);recalc(); }
+    function nextEncounter(){
+      if(actualGauge()>=30){state.gauge=0;save('mewtwo_gauge',0);}
+      const scheduledNext = state.detailEnabled && Number(state.futureGuarantees[0])===2 ? 2 : 3;
+      state.fedCount=0;state.isChance=false;state.isFull=false;state.history=[];state.bonusUsedThisEncounter=false;
+      save('mewtwo_fedCount',0);save('mewtwo_isChance',false);save('mewtwo_isFull',false);save('mewtwo_history',[]);save('mewtwo_bonusUsedThisEncounter',false);
+      state.guaranteedCount=scheduledNext; save('mewtwo_guaranteedCount',scheduledNext);
+      const next={...state.inventory};let e=parseInt(next.encounters,10)||0;if(e>0)next.encounters=e-1;next.s4=scheduledNext===2?0:1;
+      state.futureGuarantees=normalizeFutureGuarantees(state.futureGuarantees.slice(1),next.encounters);
+      state.formFutureGuarantees=clone(state.futureGuarantees);
+      save('mewtwo_futureGuarantees',state.futureGuarantees);
+      state.inventory=next;state.formData=clone(next);save('mewtwo_inventory',next);recalc();
+    }
 
     buildRows();
+    els.futureDialogClose.addEventListener('click',closeFutureDialog);
+    els.futureDialog.addEventListener('click',e=>{if(e.target===els.futureDialog)closeFutureDialog();});
+    els.futureDetailToggle.addEventListener('change',e=>{state.formDetailEnabled=!!e.target.checked;renderFutureDialog();render();});
     els.resetGauge.addEventListener('click',()=>{ if(confirm('フレンドポイントと食べた枚数を0にリセットしますか？')){state.gauge=0;state.fedCount=0;state.isChance=false;state.isFull=false;state.history=[];save('mewtwo_gauge',0);save('mewtwo_fedCount',0);save('mewtwo_isChance',false);save('mewtwo_isFull',false);save('mewtwo_history',[]);recalc();} });
     els.gaugeInput.addEventListener('input',e=>{const v=e.target.value;if(v==='')state.gauge='';else state.gauge=Math.min(30,Math.max(0,parseInt(v,10)||0));state.history=[];state.isFull=false;save('mewtwo_gauge',state.gauge);save('mewtwo_history',[]);save('mewtwo_isFull',false);recalc();});
     els.chanceToggle.addEventListener('change',e=>{state.isChance=e.target.checked;save('mewtwo_isChance',state.isChance);recalc();});
@@ -1142,7 +1255,13 @@
     els.premiumToggle.addEventListener('change',e=>{state.isPremium=e.target.checked;save('mewtwo_isPremium',state.isPremium);render();recalc();});
     els.normalBtn.addEventListener('click',()=>handleThrow(1)); els.bigBtn.addEventListener('click',()=>handleThrow(3)); els.superBtn.addEventListener('click',()=>handleThrow(30)); els.fullBtn.addEventListener('click',()=>handleThrow(0));
     els.undoBtn.addEventListener('click',undo); els.nextEncounterBtn.addEventListener('click',nextEncounter);
-    els.applyBtn.addEventListener('click',()=>{const clean={...state.formData};for(const k of ['s6','s5','s4','s3','s1','encounters'])if(clean[k]==='')clean[k]=0;state.inventory=clean;state.formData=clone(clean);save('mewtwo_inventory',clean);recalc();});
+    els.applyBtn.addEventListener('click',()=>{
+      const clean={...state.formData};for(const k of ['s6','s5','s4','s3','s1','encounters'])if(clean[k]==='')clean[k]=0;
+      const future=normalizeFutureGuarantees(state.formFutureGuarantees,clean.encounters);
+      state.inventory=clean;state.formData=clone(clean);
+      state.detailEnabled=!!state.formDetailEnabled;state.futureGuarantees=future;state.formFutureGuarantees=clone(future);
+      save('mewtwo_inventory',clean);save('mewtwo_futureGuaranteeDetailEnabled',state.detailEnabled);save('mewtwo_futureGuarantees',future);recalc();
+    });
     window.addEventListener('beforeunload',stopWorker);
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
       window.addEventListener('load', () => {
