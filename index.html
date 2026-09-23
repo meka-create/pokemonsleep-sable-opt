@@ -916,24 +916,42 @@
               const currentPreservesS6 = preferPreserveS6OnTie && a.id !== 's6';
               const bestPreservesS6 = preferPreserveS6OnTie && actions[bestAction].id !== 's6';
               const bestAForBonusFinish = actions[bestAction];
+
+              // チャンス1投目でそのまま捕獲できる候補がある場合だけ、同期待値時の最優先タイブレークにする。
+              // 1投で終われる候補同士なら必要量に最も適した小さいサブレを優先。
+              // 同じ値（プレパスOFFのボーナス(3) vs スーパー(3)）では従来どおりボーナスを優先する。
+              // 1投で終われない状態ではこの限定ルールを使わず、従来のボーナス優先等へそのまま戻す。
+              const currentChanceFinishesNow = cChance && cp === 0
+                && catchesOnMinimum(ai, cg, cp, cChance);
+              const bestChanceFinishesNow = cChance && cp === 0
+                && catchesOnMinimum(bestAction, cg, cp, cChance);
+              let decidedByChanceOneThrow = false;
+              if (currentChanceFinishesNow !== bestChanceFinishesNow) {
+                betterTie = currentChanceFinishesNow;
+                decidedByChanceOneThrow = true;
+              } else if (currentChanceFinishesNow && bestChanceFinishesNow) {
+                betterTie = tieRank(a) < tieRank(bestAForBonusFinish);
+                decidedByChanceOneThrow = true;
+              }
+
               // 現在回で使わなければ消えるボーナスサブレが、この1投だけで確定捕獲できるなら、
-              // 同期待値・同じ保証内100%捕獲の候補より優先する。
-              // 特にチャンス時は「小さい数字から」のタイブレークで不要な前置き投球を挟まない。
+              // 同期待値・同じ保証内100%捕獲の候補より優先する従来ルール。
+              // ただしチャンス1投で終われる候補同士は、上の限定ルールですでに決定済み。
               const currentBonusFinishesNow = currentKeepsGuarantee
                 && a.id === 's4'
                 && catchesOnMinimum(ai, cg, cp, cChance);
               const bestBonusFinishesNow = bestKeepsGuarantee
                 && bestAForBonusFinish.id === 's4'
                 && catchesOnMinimum(bestAction, cg, cp, cChance);
-              if (currentBonusFinishesNow !== bestBonusFinishesNow) {
+              if (!decidedByChanceOneThrow && currentBonusFinishesNow !== bestBonusFinishesNow) {
                 betterTie = currentBonusFinishesNow;
-              } else if (currentPreservesS6 !== bestPreservesS6) {
+              } else if (!decidedByChanceOneThrow && currentPreservesS6 !== bestPreservesS6) {
                 // 19以上・余剰目安未満で期待値まで同じなら、PDFの基本方針どおり6を温存。
                 betterTie = currentPreservesS6;
-              } else if (currentKeepsGuarantee !== bestKeepsGuarantee) {
+              } else if (!decidedByChanceOneThrow && currentKeepsGuarantee !== bestKeepsGuarantee) {
                 // 保証内100%捕獲を維持できる候補を同期待値時だけ優先。
                 betterTie = currentKeepsGuarantee;
-              } else {
+              } else if (!decidedByChanceOneThrow) {
                 const bestA = actions[bestAction];
 
                 // 確定取り切り中、現在候補なら今すぐ捕獲でき、従来候補の通常成功ルートでも
