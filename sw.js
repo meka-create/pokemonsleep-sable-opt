@@ -1,7 +1,9 @@
-const CACHE_NAME = 'mewtwo-sable-opt-v1';
+const CACHE_NAME = 'mewtwo-sable-opt-v4-program-cleanup';
 const APP_SHELL = [
   './',
   './index.html',
+  './app.js',
+  './solver-worker.js',
   './manifest.webmanifest',
   './ogp-card.png',
   './icons/favicon-32.png',
@@ -9,6 +11,12 @@ const APP_SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
+const NETWORK_FIRST_PATHS = new Set([
+  './index.html',
+  './app.js',
+  './solver-worker.js',
+  './manifest.webmanifest'
+]);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -26,6 +34,19 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+const networkFirst = async (request, fallback) => {
+  try {
+    const response = await fetch(request);
+    if (response && response.status === 200 && response.type === 'basic') {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    return (await caches.match(request)) || (fallback ? await caches.match(fallback) : undefined);
+  }
+};
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -34,15 +55,13 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy));
-          return response;
-        })
-        .catch(() => caches.match('./index.html').then((cached) => cached || caches.match('./')))
-    );
+    event.respondWith(networkFirst(request, './index.html'));
+    return;
+  }
+
+  const relativePath = `./${url.pathname.split('/').pop()}`;
+  if (NETWORK_FIRST_PATHS.has(relativePath)) {
+    event.respondWith(networkFirst(request));
     return;
   }
 
