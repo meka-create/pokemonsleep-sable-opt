@@ -719,6 +719,11 @@
       // 4 vs 3 の同値判定などで「この1手を固定した場合の当該遭遇捕獲率」を
       // 同じ状態について何度も再計算しないための専用キャッシュ。
       const forcedCatchMemo = new Map();
+      // 期待値・この回の捕獲率まで同値の時だけ使う資源節約タイブレーク用。
+      // 現在遭遇が終わるまでに「有限在庫」のサブレを何枚消費する期待値かを記録し、
+      // ∞サブレだけで完結できるルートを、小さい数字順より先に選べるようにする。
+      const finiteUseMemo = new Map();
+      const forcedFiniteUseMemo = new Map();
 
       function policyAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode) {
         if (ce <= 0 || cg >= TARGET) return -1;
@@ -770,6 +775,52 @@
         const eatProb = cp >= guarForMode(mode) ? 0.6 : 1.0;
         const out = eatProb * pEat;
         forcedCatchMemo.set(forcedKey, out);
+        return out;
+      };
+
+
+      function policyFiniteUseCurrentEncounter(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode) {
+        if (cg >= TARGET || ce <= 0) return 0;
+        const k = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        const cached = finiteUseMemo.get(k);
+        if (cached !== undefined) return cached;
+        const ai = policyAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        if (ai < 0) { finiteUseMemo.set(k, 0); return 0; }
+        const out = forcedActionFiniteUseCurrentEncounter(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        finiteUseMemo.set(k, out);
+        return out;
+      }
+
+      const forcedActionFiniteUseCurrentEncounter = (ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode) => {
+        if (ai < 0 || cg >= TARGET || ce <= 0) return 0;
+        const stateKey = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        const forcedKey = `${stateKey}|${ai}`;
+        const cached = forcedFiniteUseMemo.get(forcedKey);
+        if (cached !== undefined) return cached;
+
+        const a = actions[ai];
+        const finiteCost = ctx.isInf[a.id] ? 0 : 1;
+        const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+        const np = Math.min(guarForMode(mode), cp + 1);
+        const afterEatCost = (ng) => {
+          const clamped = Math.min(TARGET, ng);
+          if (clamped >= TARGET) return finiteCost;
+          return finiteCost + policyFiniteUseCurrentEncounter(clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce, mode);
+        };
+
+        let expectedCostAfterEat;
+        if (cChance && cp === 0) {
+          expectedCostAfterEat = 0.10 * finiteCost
+                           + 0.90 * afterEatCost(cg + a.val * 3);
+        } else {
+          expectedCostAfterEat = 0.02 * finiteCost
+                           + 0.08 * afterEatCost(cg + a.val * 3)
+                           + 0.90 * afterEatCost(cg + a.val);
+        }
+        // 保証外で食べなかった場合はサブレ非消費なので、有限在庫の消費も0枚。
+        const eatProb = cp >= guarForMode(mode) ? 0.6 : 1.0;
+        const out = eatProb * expectedCostAfterEat;
+        forcedFiniteUseMemo.set(forcedKey, out);
         return out;
       };
 
@@ -1002,8 +1053,37 @@
                   if (currentIsPdf !== bestIsPdf) {
                     betterTie = currentIsPdf;
                   } else {
-                    // 通常の同値時はPDF表→小さい数字順。
-                    betterTie = tieRank(a) < tieRank(bestA);
+                    // プレパスOFFのボーナス(3) vs スーパー(3)は、従来ルールを最優先で維持する。
+                    // 片方が∞でも、この組み合わせだけは「同期待値ならボーナス優先」を変えない。
+                    const isOffBonusVsSuper = !ctx.premium && (
+                      (a.id === 's4' && bestA.id === 's3') ||
+                      (a.id === 's3' && bestA.id === 's4')
+                    );
+                    let decidedByInfiniteOnly = false;
+                    if (isOffBonusVsSuper) {
+                      betterTie = a.id === 's4';
+                    } else {
+                      // 期待値に加えて「この回の捕獲率」まで同値なら、
+                      // 現在遭遇を∞サブレだけで進められるルートを有限サブレ消費ルートより優先する。
+                      // これは資源節約の限定タイブレークで、期待捕獲数そのものは変更しない。
+                      const currentCatch = forcedActionCatchProb(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+                      const bestCatch = forcedActionCatchProb(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+                      if (Math.abs(currentCatch - bestCatch) <= 1e-12) {
+                        const currentFiniteUse = forcedActionFiniteUseCurrentEncounter(ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+                        const bestFiniteUse = forcedActionFiniteUseCurrentEncounter(bestAction, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+                        const currentInfiniteOnly = currentFiniteUse <= 1e-12;
+                        const bestInfiniteOnly = bestFiniteUse <= 1e-12;
+                        if (currentInfiniteOnly !== bestInfiniteOnly) {
+                          betterTie = currentInfiniteOnly;
+                          decidedByInfiniteOnly = true;
+                        }
+                      }
+
+                      if (!decidedByInfiniteOnly) {
+                        // 通常の最終タイブレークは従来どおり小さい数字順。
+                        betterTie = tieRank(a) < tieRank(bestA);
+                      }
+                    }
                   }
                 }
               }
