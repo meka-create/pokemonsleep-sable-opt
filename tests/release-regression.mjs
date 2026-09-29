@@ -1,11 +1,11 @@
 // Run with: node tests/release-regression.mjs
-// One command for pre-release verification of solver behavior + persisted-user-data migration.
+// One command for pre-release verification of solver behavior + persisted-user-data migration + update delivery.
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const checks = ['solver-regression.mjs', 'storage-migration-regression.mjs'];
+const checks = ['solver-regression.mjs', 'storage-migration-regression.mjs', 'update-delivery-regression.mjs'];
 
 for (const file of checks) {
   const result = spawnSync(process.execPath, [path.join(here, file)], { stdio:'inherit' });
