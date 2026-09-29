@@ -33,7 +33,7 @@ const cases = [
   {
     name:'7 encounters / premium baseline',
     input:request({ encounters:7 }),
-    expected:{ ev:4.256326229324175, catchProb:0.38814543999999995, action:'s5', route:['ハイパー(5)','ハイパー(5)','ハイパー(5)','ハイパー(5)','ボーナス+(4)','ミュウツー(6)'] }
+    expected:{ ev:4.256326229324175, catchProb:0.38814543999999995, action:'s5', route:['ハイパー(5)','ハイパー(5)','ハイパー(5)','ハイパー(5)','ボーナス+(4)','伝説(6)'] }
   },
   {
     name:'final encounter prioritizes current catch rate',
@@ -51,14 +51,24 @@ const cases = [
     expected:{ ev:2.2865940267947904, catchProb:1, action:'s3', route:['スーパー(3)'] }
   },
   {
-    name:'chance remaining 15 final -> hyper one throw',
+    name:'chance remaining 15 final -> preserve hyper when equal',
     input:request({ encounters:1, gauge:15, chance:true }),
-    expected:{ ev:1, catchProb:1, action:'s5', route:['ハイパー(5)'] }
+    expected:{ ev:1, catchProb:1, action:'s4', route:['ボーナス+(4)','スーパー(3)'] }
+  },
+  {
+    name:'final encounter user case preserves hyper with legendary + bonus',
+    input:request({ encounters:1, gauge:8, chance:true, inventory:{s6:3,s5:1,s4:1,s3:'∞',s1:'∞'} }),
+    expected:{ ev:1, catchProb:1, action:'s6', route:['伝説(6)','ボーナス+(4)'] }
+  },
+  {
+    name:'final encounter minimizes legendary after hyper is preserved',
+    input:request({ encounters:1, gauge:18, chance:false, inventory:{s6:3,s5:1,s4:1,s3:'∞',s1:'∞'} }),
+    expected:{ ev:1, catchProb:1, action:'s4', route:['ボーナス+(4)','スーパー(3)','伝説(6)'] }
   },
   {
     name:'two-guarantee remaining 12 -> 6 + 6',
     input:request({ guaranteedCount:2, encounters:2, gauge:18, inventory:{s6:2,s5:0,s4:0,s3:0,s1:0} }),
-    expected:{ ev:1.03124, catchProb:1, action:'s6', route:['ミュウツー(6)','ミュウツー(6)'] }
+    expected:{ ev:1.03124, catchProb:1, action:'s6', route:['伝説(6)','伝説(6)'] }
   },
   {
     name:'two-guarantee remaining 10 -> 5 + 5',

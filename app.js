@@ -123,7 +123,7 @@
     const els = Object.fromEntries(['gaugeInput','progressBar','resetGauge','chanceLabel','chanceToggle','guaranteeSelect','guaranteeTrigger','guaranteeTriggerText','guaranteeMenu','feedStatus','nextMove','detailCard','catchProb','route','resultArea','normalBtn','bigBtn','superBtn','fullBtn','fullMessage','passMessage','undoBtn','nextEncounterBtn','nextEncounterDialog','nextEncounterCancel','nextEncounterProceed','resetGaugeDialog','resetGaugeCancel','resetGaugeProceed','expectedTotal','expectBox','premiumToggle','premiumTrack','premiumLabel','inputList','applyWrap','applyBtn','futureDialog','futureDialogClose','futureDetailToggle','futureOffNote','futureScheduleWrap','futureScheduleList'].map(id=>[id,$(id)]));
 
     const ROWS = [
-      {id:'s6', label:()=> 'ミュウツーサブレ (6)', inf:false},
+      {id:'s6', label:()=> '伝説サブレ (6)', inf:false},
       {id:'s5', label:()=> 'ハイパーサブレ (5)', inf:false},
       {id:'s4', label:()=> state.isPremium ? 'ボーナスサブレ+ (4)' : 'ボーナスサブレ (3)', inf:false, max:1},
       {id:'s3', label:()=> 'スーパーサブレ (3)', inf:true},

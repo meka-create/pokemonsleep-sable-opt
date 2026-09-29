@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mewtwo-sable-opt-v4-program-cleanup';
+const CACHE_NAME = 'legendary-sable-opt-v6-generic-name';
 const APP_SHELL = [
   './',
   './index.html',

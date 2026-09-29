@@ -171,7 +171,7 @@
         { id: 's3', val: 3, name: 'スーパー(3)' },
         { id: 's4', val: ctx.values.s4, name: ctx.premium ? 'ボーナス+(4)' : 'ボーナス(3)' },
         { id: 's5', val: 5, name: 'ハイパー(5)' },
-        { id: 's6', val: 6, name: 'ミュウツー(6)' }
+        { id: 's6', val: 6, name: '伝説(6)' }
       ];
 
       // 同期待値時の比較は探索順に依存させず、後段の完全な比較器で一意に決める。
@@ -340,6 +340,11 @@
       // ボーナス(s4)は使い切り資源なのでここには含めない。
       const carryoverFiniteUseMemo = new Map();
       const forcedCarryoverFiniteUseMemo = new Map();
+      // 最終遭遇専用タイブレーク用。イベント後も汎用価値が残るハイパー(5)を最優先で温存し、
+      // その条件まで同じ候補では、伝説(6)の期待消費も最小化する。
+      // どちらも現在遭遇が終わるまでの「期待消費枚数」を比較する。
+      const actionUseMemo = new Map();
+      const forcedActionUseMemo = new Map();
 
       function policyAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode) {
         if (ce <= 0 || cg >= TARGET) return -1;
@@ -440,6 +445,53 @@
         return out;
       };
 
+
+      function policyExpectedActionUseCurrentEncounter(targetId, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode) {
+        if (cg >= TARGET || ce <= 0) return 0;
+        const stateKey = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        const k = `${targetId}|${stateKey}`;
+        const cached = actionUseMemo.get(k);
+        if (cached !== undefined) return cached;
+        const ai = policyAction(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        if (ai < 0) { actionUseMemo.set(k, 0); return 0; }
+        const out = forcedActionExpectedActionUseCurrentEncounter(targetId, ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        actionUseMemo.set(k, out);
+        return out;
+      }
+
+      const forcedActionExpectedActionUseCurrentEncounter = (targetId, ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode) => {
+        if (ai < 0 || cg >= TARGET || ce <= 0) return 0;
+        const stateKey = memoKey(cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+        const forcedKey = `${targetId}|${stateKey}|${ai}`;
+        const cached = forcedActionUseMemo.get(forcedKey);
+        if (cached !== undefined) return cached;
+
+        const a = actions[ai];
+        const useNow = a.id === targetId ? 1 : 0;
+        const [ns6, ns5, ns4, ns3, ns1] = decrementForAction(a.id, s6, s5, s4, s3, s1);
+        const np = Math.min(guarForMode(mode), cp + 1);
+        const afterEatUse = (ng) => {
+          const clamped = Math.min(TARGET, ng);
+          if (clamped >= TARGET) return useNow;
+          return useNow + policyExpectedActionUseCurrentEncounter(targetId, clamped, np, 0, ns6, ns5, ns4, ns3, ns1, ce, mode);
+        };
+
+        let expectedUseAfterEat;
+        if (cChance && cp === 0) {
+          expectedUseAfterEat = 0.10 * useNow
+                          + 0.90 * afterEatUse(cg + a.val * 3);
+        } else {
+          expectedUseAfterEat = 0.02 * useNow
+                          + 0.08 * afterEatUse(cg + a.val * 3)
+                          + 0.90 * afterEatUse(cg + a.val);
+        }
+        // 保証外で食べなかった場合、そのサブレ自体が消費されないため期待消費は0枚。
+        const eatProb = cp >= guarForMode(mode) ? 0.6 : 1.0;
+        const out = eatProb * expectedUseAfterEat;
+        forcedActionUseMemo.set(forcedKey, out);
+        return out;
+      };
+
       // 同期待値の確定取り切り中に、直後に同じサブレを使うだけの余計な前置き投球を避ける。
       // 例: 残り4で「ポケ(1)→ボーナス+(4)」と進むなら、ボーナス+(4)を今投げて捕獲する。
       // ただし、別の有限サブレを新たに消費する最短化は行わず、既存の温存判断を維持する。
@@ -475,14 +527,16 @@
       // 同期待値候補を探索順に依存せず一意に選ぶ完全比較器。
       // 優先順位:
       // 1) passと同値なら、保証内100%を維持できる時だけ投球を優先
-      // 2) チャンス1投GET（候補同士は最小の十分なサブレ）
-      // 3) 19以上・6余剰目安未満なら6温存
-      // 4) 保証内100%維持
-      // 5) 同じ現在回捕獲率なら、使い切り資源のボーナスを優先
-      // 6) 同じ現在回捕獲率なら、持ち越し可能な有限在庫を使わずに済むルートを優先
-      // 7) 不要な前置き投球を省ける場合は即時捕獲を優先
-      // 8) 小さい数字順（同値の3ではボーナス優先）
-      // 9) 最後は固定ID順
+      // 2) 最終遭遇だけ: ハイパー(5)の期待消費を最小化
+      // 3) 最終遭遇だけ: その中で伝説(6)の期待消費も最小化
+      // 4) チャンス1投GET（候補同士は最小の十分なサブレ）
+      // 5) 19以上・6余剰目安未満なら6温存
+      // 6) 保証内100%維持
+      // 7) 同じ現在回捕獲率なら、使い切り資源のボーナスを優先
+      // 8) 同じ現在回捕獲率なら、持ち越し可能な有限在庫を使わずに済むルートを優先
+      // 9) 不要な前置き投球を省ける場合は即時捕獲を優先
+      // 10) 小さい数字順（同値の3ではボーナス優先）
+      // 11) 最後は固定ID順
       // PDFの参考初手表・strategyTypeは行動決定から外し、説明・検証資料へ降格している。
       const chooseTiedAction = (candidateAis, state) => {
         let candidates = candidateAis.slice();
@@ -507,23 +561,6 @@
           if (subset.length > 0) candidates = subset;
         };
 
-        // チャンス1投目で確実に届く候補があるなら、その集合を最優先。
-        if (cChance && cp === 0) {
-          const oneThrow = candidates.filter(ai => catchesOnMinimum(ai, cg, cp, cChance));
-          if (oneThrow.length > 0) {
-            candidates = oneThrow;
-            const bestSmall = Math.min(...candidates.map(ai => smallActionRank(actions[ai])));
-            candidates = candidates.filter(ai => smallActionRank(actions[ai]) === bestSmall);
-            if (candidates.length === 1) return candidates[0];
-          }
-        }
-
-        // 残り19以上・余剰目安未満で完全同値なら6を温存。
-        if (preferPreserveS6OnTie) filterIfAny(ai => actions[ai].id !== 's6');
-
-        // 保証内100%捕獲を維持できる候補があれば、その集合へ絞る。
-        if (preferGuaranteedFinishOnTie) filterIfAny(ai => getKeepsGuarantee(ai));
-
         const catchProbMemoLocal = new Map();
         const getCatchProb = (ai) => {
           if (!catchProbMemoLocal.has(ai)) {
@@ -541,6 +578,45 @@
           }
           return maxP - minP <= EPS;
         };
+
+        // 最終遭遇では、次の伝説遭遇へ6を残す価値が消える一方、
+        // ハイパー(5)はイベント後も汎用資源として価値が残る。
+        // イベント期待値（= 最終遭遇では現在回捕獲率）が同じ候補に限り、
+        // ①ハイパーの期待消費を最小化 → ②その中で伝説の期待消費を最小化する。
+        // これによりハイパー温存を優先しつつ、6の不要な連打も抑える。
+        if (ce === 1 && candidates.length > 1 && allSameCatchProb()) {
+          const minimizeExpectedUse = (targetId) => {
+            if (ctx.isInf[targetId] || candidates.length <= 1) return;
+            const costs = new Map();
+            let minCost = Infinity;
+            for (const ai of candidates) {
+              const cost = forcedActionExpectedActionUseCurrentEncounter(targetId, ai, cg, cp, cChance, s6, s5, s4, s3, s1, ce, mode);
+              costs.set(ai, cost);
+              if (cost < minCost) minCost = cost;
+            }
+            candidates = candidates.filter(ai => Math.abs(costs.get(ai) - minCost) <= EPS);
+          };
+          minimizeExpectedUse('s5');
+          minimizeExpectedUse('s6');
+          if (candidates.length === 1) return candidates[0];
+        }
+
+        // チャンス1投目で確実に届く候補があるなら、その集合を最優先。
+        if (cChance && cp === 0) {
+          const oneThrow = candidates.filter(ai => catchesOnMinimum(ai, cg, cp, cChance));
+          if (oneThrow.length > 0) {
+            candidates = oneThrow;
+            const bestSmall = Math.min(...candidates.map(ai => smallActionRank(actions[ai])));
+            candidates = candidates.filter(ai => smallActionRank(actions[ai]) === bestSmall);
+            if (candidates.length === 1) return candidates[0];
+          }
+        }
+
+        // 残り19以上・余剰目安未満で完全同値なら6を温存。
+        if (preferPreserveS6OnTie) filterIfAny(ai => actions[ai].id !== 's6');
+
+        // 保証内100%捕獲を維持できる候補があれば、その集合へ絞る。
+        if (preferGuaranteedFinishOnTie) filterIfAny(ai => getKeepsGuarantee(ai));
 
         // ボーナスは有限在庫ではなく、その遭遇で使わなければ消える「使い切り資源」。
         // イベント期待値と現在回捕獲率が同じなら、持ち越せる資源より先に消化する。
