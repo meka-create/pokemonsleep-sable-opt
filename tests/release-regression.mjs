@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const checks = ['solver-regression.mjs', 'storage-migration-regression.mjs', 'update-delivery-regression.mjs'];
+const checks = ['solver-regression.mjs', 'storage-migration-regression.mjs', 'update-delivery-regression.mjs', 'icon-regression.mjs', 'release-integrity-regression.mjs'];
 
 for (const file of checks) {
   const result = spawnSync(process.execPath, [path.join(here, file)], { stdio:'inherit' });

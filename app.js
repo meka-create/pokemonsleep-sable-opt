@@ -182,7 +182,7 @@
       if(enc<=0){ state.engine={isCalculating:false,bestMove:{type:'完了',id:null,prob:1},expectedTotal:'0.00',routeData:{route:[],finalG:actualGauge()}}; render(); return; }
       state.engine={...state.engine,isCalculating:true,bestMove:{type:'計算中...',id:null,prob:0}}; render();
       try {
-        worker=new Worker('./solver-worker.js?v=20260929a');
+        worker=new Worker('./solver-worker.js?v=20261013a');
       } catch (error) {
         console.error(error);
         state.engine={isCalculating:false,bestMove:{type:'エラー',id:null,prob:0},expectedTotal:'0.00',routeData:{route:[],finalG:actualGauge()}};
@@ -376,7 +376,7 @@
     window.addEventListener('beforeunload',stopWorker);
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js?v=20260929a', { scope: './', updateViaCache: 'none' })
+        navigator.serviceWorker.register('./sw.js?v=20261013a', { scope: './', updateViaCache: 'none' })
           .then((registration) => registration.update())
           .catch((error) => {
             console.error('Service Worker registration failed:', error);

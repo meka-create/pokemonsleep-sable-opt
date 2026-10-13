@@ -1,15 +1,17 @@
-const CACHE_NAME = 'legendary-sable-opt-v7-update-delivery';
+const CACHE_NAME = 'legendary-sable-opt-v8-maskable-icons';
 const APP_SHELL = [
   './',
   './index.html',
-  './app.js?v=20260929a',
-  './solver-worker.js?v=20260929a',
-  './manifest.webmanifest?v=20260929a',
+  './app.js?v=20261013a',
+  './solver-worker.js?v=20261013a',
+  './manifest.webmanifest?v=20261013a',
   './ogp-card.png',
-  './icons/favicon-32.png',
-  './icons/apple-touch-icon.png',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/favicon-32.png?v=20261013a',
+  './icons/apple-touch-icon.png?v=20261013a',
+  './icons/icon-192.png?v=20261013a',
+  './icons/icon-512.png?v=20261013a',
+  './icons/icon-maskable-192.png?v=20261013a',
+  './icons/icon-maskable-512.png?v=20261013a'
 ];
 const NETWORK_FIRST_PATHS = new Set([
   './index.html',
